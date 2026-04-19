@@ -774,8 +774,8 @@ func (s *Server) chat(w http.ResponseWriter, r *http.Request) error {
 		return fmt.Errorf("empty model")
 	}
 
-	// Don't allow empty messages unless forceUpdate is true
-	if req.Prompt == "" && !req.ForceUpdate {
+	// Don't allow empty submissions unless forceUpdate is true or attachments are present.
+	if req.Prompt == "" && len(req.Attachments) == 0 && !req.ForceUpdate {
 		return fmt.Errorf("empty message")
 	}
 

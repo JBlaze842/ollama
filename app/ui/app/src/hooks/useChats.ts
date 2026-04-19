@@ -111,7 +111,7 @@ export const useChatError = (chatId: string) => {
 export const useChatApprovals = (chatId: string) => {
   return useQuery({
     queryKey: ["chatApprovals", chatId],
-    queryFn: () => ({} as PendingToolApprovals),
+    queryFn: () => ({}) as PendingToolApprovals,
     initialData: {} as PendingToolApprovals,
     staleTime: Infinity,
     gcTime: 1000 * 60 * 30,
@@ -287,8 +287,8 @@ export const useSendMessage = (chatId: string) => {
         });
         queryClient.cancelQueries({ queryKey: ["chat", chatId] });
 
-        // Only add optimistic message for non-empty messages
-        if (message.trim() !== "") {
+        // Only add optimistic message when there is visible user input
+        if (message.trim() !== "" || (attachments?.length ?? 0) > 0) {
           // Optimistically add the user message
           queryClient.setQueryData(
             ["chat", chatId],

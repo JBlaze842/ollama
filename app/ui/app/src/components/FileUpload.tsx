@@ -81,8 +81,32 @@ export function FileUpload({
     [],
   );
 
+  const processResolvedFiles = useCallback(
+    async (files: File[]) => {
+      const { validFiles, errors } = await processFilesUtil(files, {
+        maxFileSize,
+        allowedExtensions,
+        hasVisionCapability,
+        selectedModel,
+        customValidator: validateFile,
+      });
+
+      if (validFiles.length > 0 || errors.length > 0) {
+        onFilesAdded(validFiles, errors);
+      }
+    },
+    [
+      selectedModel,
+      hasVisionCapability,
+      allowedExtensions,
+      maxFileSize,
+      validateFile,
+      onFilesAdded,
+    ],
+  );
+
   // Main file processing function
-  const processFiles = useCallback(
+  const processTransferFiles = useCallback(
     async (dataTransfer: DataTransfer) => {
       const allFiles: File[] = [];
 
@@ -106,28 +130,9 @@ export function FileUpload({
       }
 
       // Use shared validation utility
-      const { validFiles, errors } = await processFilesUtil(allFiles, {
-        maxFileSize,
-        allowedExtensions,
-        hasVisionCapability,
-        selectedModel,
-        customValidator: validateFile,
-      });
-
-      // Send processed files and errors back to parent
-      if (validFiles.length > 0 || errors.length > 0) {
-        onFilesAdded(validFiles, errors);
-      }
+      await processResolvedFiles(allFiles);
     },
-    [
-      readDirectory,
-      selectedModel,
-      hasVisionCapability,
-      allowedExtensions,
-      maxFileSize,
-      validateFile,
-      onFilesAdded,
-    ],
+    [readDirectory, processResolvedFiles],
   );
 
   // Drag event handlers
@@ -147,40 +152,46 @@ export function FileUpload({
   // Paste event handler
   const handlePaste = useCallback(
     async (e: ClipboardEvent) => {
-      // Check if clipboard contains files
-      if (e.clipboardData && e.clipboardData.files.length > 0) {
-        // Check if there's text data in the clipboard
-        // Only process files if there's no text data
-        const hasTextData =
-          e.clipboardData.types.includes("text/plain") &&
-          e.clipboardData.getData("text/plain").trim().length > 0;
-
-        if (hasTextData) {
-          return;
-        }
-
-        e.preventDefault();
-
-        // Create a synthetic DataTransfer object for our processFiles function
-        const items = Array.from(e.clipboardData.items);
-        const syntheticDataTransfer = {
-          files: e.clipboardData.files,
-          items: {
-            ...items,
-            length: items.length,
-            add: () => null,
-            clear: () => {},
-            remove: () => null,
-            [Symbol.iterator]: () => items[Symbol.iterator](),
-          } as DataTransferItemList,
-          types: e.clipboardData.types,
-          getData: (format: string) => e.clipboardData!.getData(format),
-        } as DataTransfer;
-
-        await processFiles(syntheticDataTransfer);
+      if (!e.clipboardData) {
+        return;
       }
+
+      const items = Array.from(e.clipboardData.items);
+      const fileItems = items.filter((item) => item.kind === "file");
+      const hasClipboardFiles =
+        fileItems.length > 0 || e.clipboardData.files.length > 0;
+
+      if (!hasClipboardFiles) {
+        return;
+      }
+
+      const hasImageFiles = fileItems.some((item) =>
+        item.type.toLowerCase().startsWith("image/"),
+      );
+      const hasTextData =
+        e.clipboardData.types.includes("text/plain") &&
+        e.clipboardData.getData("text/plain").trim().length > 0;
+
+      if (hasTextData && !hasImageFiles) {
+        return;
+      }
+
+      const pastedFiles = fileItems
+        .map((item) => item.getAsFile())
+        .filter((file): file is File => file !== null);
+
+      if (pastedFiles.length === 0 && e.clipboardData.files.length > 0) {
+        pastedFiles.push(...Array.from(e.clipboardData.files));
+      }
+
+      if (pastedFiles.length === 0) {
+        return;
+      }
+
+      e.preventDefault();
+      await processResolvedFiles(pastedFiles);
     },
-    [processFiles],
+    [processResolvedFiles],
   );
 
   const handleDragOver = useCallback((e: React.DragEvent) => {
@@ -207,10 +218,10 @@ export function FileUpload({
       setIsDragging(false);
 
       if (hasFiles(e.dataTransfer) && e.dataTransfer) {
-        await processFiles(e.dataTransfer);
+        await processTransferFiles(e.dataTransfer);
       }
     },
-    [hasFiles, processFiles],
+    [hasFiles, processTransferFiles],
   );
 
   // Set up paste event listener

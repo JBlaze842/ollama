@@ -5,7 +5,10 @@ import { ImageThumbnail } from "./ImageThumbnail";
 import { isImageFile } from "@/utils/imageUtils";
 import CopyButton from "./CopyButton";
 import React, { useState, useMemo, useRef } from "react";
-import { FileToolStructuredPreview, FileToolStructuredResult } from "./FileToolCards";
+import {
+  FileToolStructuredPreview,
+  FileToolStructuredResult,
+} from "./FileToolCards";
 import type { PendingToolApprovals } from "@/hooks/useChats";
 
 const Message = React.memo(
@@ -29,7 +32,10 @@ const Message = React.memo(
     browserToolResult?: BrowserToolResult;
     lastToolQuery?: string;
     pendingApprovals?: PendingToolApprovals;
-    onApprovalDecision?: (toolCallId: string, approved: boolean) => Promise<void>;
+    onApprovalDecision?: (
+      toolCallId: string,
+      approved: boolean,
+    ) => Promise<void>;
   }) => {
     if (message.role === "user") {
       return (
@@ -896,76 +902,97 @@ function UserMessage({
     }
   };
 
+  const imageAttachments =
+    message.attachments?.filter((attachment: File) =>
+      isImageFile(attachment.filename),
+    ) || [];
+  const fileAttachments =
+    message.attachments?.filter(
+      (attachment: File) => !isImageFile(attachment.filename),
+    ) || [];
+  const hasMessageContent = Boolean(message.content?.trim());
+  const showMessageBubble = fileAttachments.length > 0 || hasMessageContent;
+
   return (
     <div
       className={`flex flex-col transition-opacity duration-300 ${isFaded ? "opacity-50" : "opacity-100"}`}
     >
       {/* Show image attachments above the message background */}
-      {message.attachments && message.attachments.length > 0 && (
+      {imageAttachments.length > 0 && (
         <div className="flex gap-2 mb-2 overflow-x-auto justify-end max-w-md self-end">
-          {message.attachments
-            .filter((attachment: File) => isImageFile(attachment.filename))
-            .map((attachment: File, index: number) => (
-              <div key={`image-attachment-${index}`} className="flex-shrink-0">
-                <ImageThumbnail
-                  image={attachment}
-                  className="w-16 h-16 object-cover rounded-md"
-                />
-              </div>
-            ))}
+          {imageAttachments.map((attachment: File, index: number) => (
+            <div key={`image-attachment-${index}`} className="flex-shrink-0">
+              <ImageThumbnail
+                image={attachment}
+                className="w-16 h-16 object-cover rounded-md"
+              />
+            </div>
+          ))}
         </div>
       )}
 
-      <div className="message-container mb-8 max-w-md self-end">
-        <div
-          className="message rounded-3xl bg-neutral-100 px-4 py-2 leading-normal
+      {showMessageBubble ? (
+        <div className="message-container mb-8 max-w-md self-end">
+          <div
+            className="message rounded-3xl bg-neutral-100 px-4 py-2 leading-normal
                     dark:bg-neutral-700 dark:text-white group/message relative"
-          data-role="user"
-        >
-          {/* Show non-image attachments inside the message */}
-          {message.attachments &&
-            message.attachments.some(
-              (attachment: File) => !isImageFile(attachment.filename),
-            ) && (
+            data-role="user"
+          >
+            {/* Show non-image attachments inside the message */}
+            {fileAttachments.length > 0 && (
               <div className="flex gap-2 mb-2 overflow-x-auto">
-                {message.attachments
-                  .filter(
-                    (attachment: File) => !isImageFile(attachment.filename),
-                  )
-                  .map((attachment: File, index: number) => (
-                    <div
-                      key={`file-attachment-${index}`}
-                      className="flex items-center gap-2 py-1 px-2 rounded-lg bg-neutral-50 dark:bg-neutral-600/50 transition-colors flex-shrink-0"
+                {fileAttachments.map((attachment: File, index: number) => (
+                  <div
+                    key={`file-attachment-${index}`}
+                    className="flex items-center gap-2 py-1 px-2 rounded-lg bg-neutral-50 dark:bg-neutral-600/50 transition-colors flex-shrink-0"
+                  >
+                    <svg
+                      className="w-3 h-3 text-neutral-400 dark:text-neutral-500 flex-shrink-0"
+                      fill="none"
+                      viewBox="0 0 24 24"
+                      stroke="currentColor"
                     >
-                      <svg
-                        className="w-3 h-3 text-neutral-400 dark:text-neutral-500 flex-shrink-0"
-                        fill="none"
-                        viewBox="0 0 24 24"
-                        stroke="currentColor"
-                      >
-                        <path
-                          strokeLinecap="round"
-                          strokeLinejoin="round"
-                          strokeWidth={1.5}
-                          d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"
-                        />
-                      </svg>
-                      <span className="text-xs text-neutral-600 dark:text-neutral-400 max-w-[120px] truncate">
-                        {attachment.filename}
-                      </span>
-                    </div>
-                  ))}
+                      <path
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        strokeWidth={1.5}
+                        d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"
+                      />
+                    </svg>
+                    <span className="text-xs text-neutral-600 dark:text-neutral-400 max-w-[120px] truncate">
+                      {attachment.filename}
+                    </span>
+                  </div>
+                ))}
               </div>
             )}
 
-          <div className="message-content whitespace-pre-line break-words">
-            {message.content}
-          </div>
+            {hasMessageContent && (
+              <div className="message-content whitespace-pre-line break-words">
+                {message.content}
+              </div>
+            )}
 
-          {/* Edit button */}
+            {/* Edit button */}
+            <button
+              type="button"
+              className={`edit-button absolute -bottom-5 right-1 text-xs
+                     ${
+                       isFaded
+                         ? "opacity-30"
+                         : "opacity-0 group-hover/message:opacity-100 text-neutral-500 hover:text-neutral-700 dark:text-neutral-400 dark:hover:text-neutral-200 cursor-pointer"
+                     }`}
+              onClick={isFaded ? undefined : handleEdit}
+            >
+              edit
+            </button>
+          </div>
+        </div>
+      ) : (
+        <div className="mb-8 self-end group/message relative">
           <button
             type="button"
-            className={`edit-button absolute -bottom-5 right-1 text-xs
+            className={`edit-button text-xs
                      ${
                        isFaded
                          ? "opacity-30"
@@ -976,7 +1003,7 @@ function UserMessage({
             edit
           </button>
         </div>
-      </div>
+      )}
     </div>
   );
 }

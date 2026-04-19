@@ -5,6 +5,7 @@ package ui
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -218,6 +219,105 @@ func TestBuildChatRequestPreservesToolCallIDs(t *testing.T) {
 	}
 	if req.Messages[1].ToolCallID != "call-1" {
 		t.Fatalf("tool message ToolCallID = %q, want %q", req.Messages[1].ToolCallID, "call-1")
+	}
+}
+
+func TestChatRejectsEmptyMessageWithoutAttachments(t *testing.T) {
+	testStore := &store.Store{
+		DBPath: filepath.Join(t.TempDir(), "db.sqlite"),
+	}
+	defer testStore.Close()
+
+	server := &Server{Store: testStore}
+
+	body := bytes.NewBufferString(`{"model":"test-model","prompt":""}`)
+	req := httptest.NewRequest("POST", "/api/v1/chat/chat-1", body)
+	req.SetPathValue("id", "chat-1")
+	req.Header.Set("Content-Type", "application/json")
+	rr := httptest.NewRecorder()
+
+	err := server.chat(rr, req)
+	if err == nil || err.Error() != "empty message" {
+		t.Fatalf("chat() error = %v, want empty message", err)
+	}
+}
+
+func TestChatAllowsAttachmentOnlyMessage(t *testing.T) {
+	var captured api.ChatRequest
+
+	ollamaServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/show":
+			w.Header().Set("Content-Type", "application/json")
+			if err := json.NewEncoder(w).Encode(api.ShowResponse{}); err != nil {
+				t.Fatalf("encode show response: %v", err)
+			}
+		case "/api/chat":
+			if err := json.NewDecoder(r.Body).Decode(&captured); err != nil {
+				t.Fatalf("decode chat request: %v", err)
+			}
+			w.Header().Set("Content-Type", "application/x-ndjson")
+			if _, err := w.Write([]byte(`{"message":{"role":"assistant","content":"ok"},"done":true}` + "\n")); err != nil {
+				t.Fatalf("write chat response: %v", err)
+			}
+		default:
+			t.Fatalf("unexpected Ollama API path: %s", r.URL.Path)
+		}
+	}))
+	defer ollamaServer.Close()
+
+	t.Setenv("OLLAMA_HOST", ollamaServer.URL)
+
+	testStore := &store.Store{
+		DBPath: filepath.Join(t.TempDir(), "db.sqlite"),
+	}
+	defer testStore.Close()
+
+	server := &Server{Store: testStore}
+
+	body := bytes.NewBufferString(`{"model":"test-model","prompt":"","attachments":[{"filename":"pasted.png","data":"` +
+		base64.StdEncoding.EncodeToString([]byte("png-bytes")) +
+		`"}]}`)
+	req := httptest.NewRequest("POST", "/api/v1/chat/chat-1", body)
+	req.SetPathValue("id", "chat-1")
+	req.Header.Set("Content-Type", "application/json")
+	rr := httptest.NewRecorder()
+
+	if err := server.chat(rr, req); err != nil {
+		t.Fatalf("chat() error = %v", err)
+	}
+
+	if len(captured.Messages) != 1 {
+		t.Fatalf("len(captured.Messages) = %d, want 1", len(captured.Messages))
+	}
+	if captured.Messages[0].Role != "user" {
+		t.Fatalf("captured role = %q, want user", captured.Messages[0].Role)
+	}
+	if captured.Messages[0].Content != "" {
+		t.Fatalf("captured content = %q, want empty", captured.Messages[0].Content)
+	}
+	if len(captured.Messages[0].Images) != 1 {
+		t.Fatalf("len(captured.Messages[0].Images) = %d, want 1", len(captured.Messages[0].Images))
+	}
+
+	chat, err := testStore.Chat("chat-1")
+	if err != nil {
+		t.Fatalf("Chat() error = %v", err)
+	}
+	if len(chat.Messages) != 2 {
+		t.Fatalf("len(chat.Messages) = %d, want 2", len(chat.Messages))
+	}
+	if chat.Messages[0].Role != "user" {
+		t.Fatalf("stored user role = %q, want user", chat.Messages[0].Role)
+	}
+	if chat.Messages[0].Content != "" {
+		t.Fatalf("stored user content = %q, want empty", chat.Messages[0].Content)
+	}
+	if len(chat.Messages[0].Attachments) != 1 {
+		t.Fatalf("len(chat.Messages[0].Attachments) = %d, want 1", len(chat.Messages[0].Attachments))
+	}
+	if got := string(chat.Messages[0].Attachments[0].Data); got != "png-bytes" {
+		t.Fatalf("stored attachment data = %q, want %q", got, "png-bytes")
 	}
 }
 

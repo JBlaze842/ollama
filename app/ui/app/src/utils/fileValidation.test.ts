@@ -12,11 +12,7 @@ describe("fileValidation", () => {
   });
 
   describe("validateFile", () => {
-    const createMockFile = (
-      name: string,
-      size: number,
-      type: string,
-    ): File => {
+    const createMockFile = (name: string, size: number, type: string): File => {
       const blob = new Blob(["test content"], { type });
       return new File([blob], name, { type });
     };
@@ -56,13 +52,22 @@ describe("fileValidation", () => {
       expect(result.valid).toBe(true);
     });
 
+    it("should accept pasted images without a filename by using the mime type", () => {
+      const blob = new Blob(["test content"], { type: "image/png" });
+      const file = new File([blob], "", { type: "image/png" });
+      const result = validateFile(file, {
+        hasVisionCapability: true,
+      });
+      expect(result.valid).toBe(true);
+    });
+
     it("should reject files that are too large", () => {
       // Create a file with size property set correctly
       const largeSize = 11 * 1024 * 1024; // 11MB
       const content = new Uint8Array(largeSize);
       const blob = new Blob([content], { type: "image/webp" });
       const file = new File([blob], "large.webp", { type: "image/webp" });
-      
+
       const result = validateFile(file, {
         hasVisionCapability: true,
         maxFileSize: 10, // 10MB limit

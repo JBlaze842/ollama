@@ -43,6 +43,14 @@ export const TEXT_FILE_EXTENSIONS = [
 
 export const IMAGE_EXTENSIONS = ["png", "jpg", "jpeg", "webp"];
 
+const MIME_TYPE_EXTENSIONS: Record<string, string> = {
+  "image/jpeg": "jpg",
+  "image/jpg": "jpg",
+  "image/png": "png",
+  "image/webp": "webp",
+  "image/gif": "gif",
+};
+
 export interface FileValidationOptions {
   maxFileSize?: number; // in MB
   allowedExtensions?: string[];
@@ -56,6 +64,35 @@ export interface ValidationResult {
   error?: string;
 }
 
+function getFileExtension(
+  file: Pick<File, "name" | "type">,
+): string | undefined {
+  const fileExtension = file.name.toLowerCase().split(".").pop();
+  if (fileExtension && fileExtension !== file.name.toLowerCase()) {
+    return fileExtension;
+  }
+
+  return MIME_TYPE_EXTENSIONS[file.type.toLowerCase()];
+}
+
+function getResolvedFilename(file: Pick<File, "name" | "type">): string {
+  const trimmedName = file.name.trim();
+  if (trimmedName) {
+    return trimmedName;
+  }
+
+  const extension = getFileExtension(file);
+  if (!extension) {
+    return "attachment";
+  }
+
+  if (file.type.toLowerCase().startsWith("image/")) {
+    return `pasted-image.${extension}`;
+  }
+
+  return `attachment.${extension}`;
+}
+
 export function validateFile(
   file: File,
   options: FileValidationOptions = {},
@@ -67,7 +104,7 @@ export function validateFile(
   } = options;
 
   const MAX_FILE_SIZE = maxFileSize * 1024 * 1024; // Convert MB to bytes
-  const fileExtension = file.name.toLowerCase().split(".").pop();
+  const fileExtension = getFileExtension(file);
 
   // Custom validation first
   if (customValidator) {
@@ -119,11 +156,12 @@ export async function processFiles(
   const errors: Array<{ filename: string; error: string }> = [];
 
   for (const file of files) {
+    const filename = getResolvedFilename(file);
     const validation = validateFile(file, options);
 
     if (!validation.valid) {
       errors.push({
-        filename: file.name,
+        filename,
         error: validation.error || "File validation failed",
       });
       continue;
@@ -132,14 +170,14 @@ export async function processFiles(
     try {
       const fileBytes = await readFileAsBytes(file);
       validFiles.push({
-        filename: file.name,
+        filename,
         data: fileBytes,
         type: file.type || undefined,
       });
     } catch (error) {
-      console.error(`Error reading file ${file.name}:`, error);
+      console.error(`Error reading file ${filename}:`, error);
       errors.push({
-        filename: file.name,
+        filename,
         error: "Error reading file",
       });
     }

@@ -161,6 +161,12 @@ function ChatForm({
   const supportsToolCalls = useHasToolsCapability(selectedModel?.model);
   const supportsWebSearch = supportsToolCalls;
   const hasDraftAttachments = message.attachments.length > 0;
+  const sendableAttachments = message.attachments.filter(
+    (attachment) => hasVisionCapability || !isImageFile(attachment.filename),
+  );
+  const hasSendableAttachments = sendableAttachments.length > 0;
+  const hasSendableDraft =
+    message.content.trim().length > 0 || hasSendableAttachments;
   const canUseFileTools =
     supportsToolCalls &&
     fileToolsEnabled &&
@@ -196,7 +202,10 @@ function ChatForm({
   ]);
 
   useEffect(() => {
-    if ((!canUseFileTools || fileToolsBlockedByAttachments) && fileToolsRequested) {
+    if (
+      (!canUseFileTools || fileToolsBlockedByAttachments) &&
+      fileToolsRequested
+    ) {
       setFileToolsRequested(false);
     }
   }, [canUseFileTools, fileToolsBlockedByAttachments, fileToolsRequested]);
@@ -486,7 +495,13 @@ function ChatForm({
   }, [isStreaming, editingMessage, onCancelEdit, navigateToNextElement]);
 
   const handleSubmit = async () => {
-    if (!message.content.trim() || isStreaming || isDownloading) return;
+    if (
+      (!message.content.trim() && !hasSendableAttachments) ||
+      isStreaming ||
+      isDownloading
+    ) {
+      return;
+    }
 
     if (cloudDisabled && selectedModel?.isCloud()) {
       return;
@@ -498,12 +513,12 @@ function ChatForm({
     }
 
     // Prepare attachments for submission, excluding unsupported images
-    const attachmentsToSend: FileAttachment[] = message.attachments
-      .filter((att) => hasVisionCapability || !isImageFile(att.filename))
-      .map((att) => ({
+    const attachmentsToSend: FileAttachment[] = sendableAttachments.map(
+      (att) => ({
         filename: att.filename,
         data: att.data || new Uint8Array(0), // Empty data for existing files
-      }));
+      }),
+    );
 
     const useWebSearch = supportsWebSearch && webSearchEnabled;
     const useFileTools = fileToolsAvailableForDraft && fileToolsRequested;
@@ -986,7 +1001,7 @@ function ChatForm({
               disabled={
                 !isStreaming &&
                 !isDownloading &&
-                (!message.content.trim() ||
+                (!hasSendableDraft ||
                   shouldShowLoginBanner ||
                   (cloudDisabled && selectedModel?.isCloud()) ||
                   message.fileErrors.length > 0)
