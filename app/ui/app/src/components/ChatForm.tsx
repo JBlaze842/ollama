@@ -115,7 +115,6 @@ function ChatForm({
   const { selectedModel } = useSelectedModel();
   const hasVisionCapability = useHasVisionCapability(selectedModel?.model);
   const { isAuthenticated, isLoading: isLoadingUser } = useUser();
-  void isLoadingUser;
   const [loginPromptFeature, setLoginPromptFeature] = useState<
     "webSearch" | "turbo" | null
   >(null);
@@ -154,7 +153,6 @@ function ChatForm({
   const { cloudDisabled } = useCloudStatus();
 
   const supportsWebSearch = useHasToolsCapability(selectedModel?.model);
-  void supportsWebSearch;
   // Use per-chat thinking level instead of global
   const thinkLevel: ThinkingLevel =
     settingsThinkLevel === "none" || !settingsThinkLevel
@@ -233,13 +231,11 @@ function ChatForm({
     }
   }, [onFilesReceived, handleFilesReceived]);
 
-  // Determine if login banner should be shown
-  // const shouldShowLoginBanner =
-  //   !cloudDisabled &&
-  //   !isLoadingUser &&
-  //   !isAuthenticated &&
-  //   ((webSearchEnabled && supportsWebSearch) || selectedModel?.isCloud());
-  const shouldShowLoginBanner = false;
+  const shouldShowLoginBanner =
+    !cloudDisabled &&
+    !isLoadingUser &&
+    !isAuthenticated &&
+    ((webSearchEnabled && supportsWebSearch) || selectedModel?.isCloud());
 
   // Determine which feature to highlight in the banner
   const getActiveFeatureForBanner = () => {
@@ -487,8 +483,7 @@ function ChatForm({
         data: att.data || new Uint8Array(0), // Empty data for existing files
       }));
 
-    //const useWebSearch = supportsWebSearch && webSearchEnabled;
-    const useWebSearch = true;
+    const useWebSearch = supportsWebSearch && webSearchEnabled;
 
     const useThink = modelSupportsThinkingLevels
       ? thinkLevel
@@ -723,11 +718,7 @@ function ChatForm({
       <div
         className={`relative mx-auto flex bg-neutral-100 w-full max-w-[768px] flex-col items-center rounded-3xl pb-2 pt-4 dark:bg-neutral-800 dark:border-neutral-700 min-h-[88px] transition-opacity duration-200 ${isDisabled ? "opacity-50" : "opacity-100"}`}
       >
-        {/* {isDisabled && (
-          // overlay to block interaction
-          <div className="absolute inset-0 z-50 rounded-3xl" />
-        )} */}
-        {false && <div className="absolute inset-0 z-50 rounded-3xl" />}
+        {isDisabled && <div className="absolute inset-0 z-50 rounded-3xl" />}
         {editingMessage && (
           <div className="w-full px-5 pb-2">
             <p className="text-xs text-neutral-500 dark:text-neutral-400">
@@ -874,9 +865,7 @@ function ChatForm({
         {/* Controls */}
         <div className="flex w-full items-center justify-end gap-2 px-3 pt-2">
           {/* Tool buttons - animate from underneath model picker */}
-          {/* {!isDisabled && ( */}
-          {true && (
-            <div className="flex-1 flex justify-end items-center gap-2">
+          <div className="flex-1 flex justify-end items-center gap-2">
               <div className={`flex gap-2`}>
                 {/* File Upload Buttons */}
                 <button
@@ -928,26 +917,21 @@ function ChatForm({
                 <WebSearchButton
                   ref={webSearchButtonRef}
                   isVisible={true}
-                  isActive={true}
+                  isActive={webSearchEnabled}
                   onToggle={() => {
-                    // if (!webSearchEnabled && !isAuthenticated) {
-                    //   setLoginPromptFeature("webSearch");
-                    // }
-                    const enable = true;
+                    const enable = !webSearchEnabled;
                     if (supportsThinkToggling && enable) {
                       setSettings({
-                        WebSearchEnabled: true,
+                        WebSearchEnabled: enable,
                         ThinkEnabled: false,
                       });
                       return;
                     }
-                    setSettings({ WebSearchEnabled: true });
+                    setSettings({ WebSearchEnabled: enable });
                   }}
                 />
               </div>
             </div>
-          )}
-
           {/* Model picker and submit button */}
           <div className="flex items-center gap-2 relative z-20">
             <ModelPicker

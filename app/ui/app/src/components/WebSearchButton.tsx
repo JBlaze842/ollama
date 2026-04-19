@@ -8,10 +8,7 @@ interface ButtonProps {
 
 export const WebSearchButton = forwardRef<HTMLButtonElement, ButtonProps>(
   function WebSearchButton({ isVisible, isActive, onToggle }, ref) {
-    // Preserve the prop while the visibility guard is hard-disabled for debugging.
-    void isVisible;
-    // if (!isVisible) return null;
-    if (false) return null;
+    if (!isVisible) return null;
 
     return (
       <button
