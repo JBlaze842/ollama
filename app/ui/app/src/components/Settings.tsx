@@ -30,6 +30,12 @@ import {
   getInferenceCompute,
 } from "@/api";
 
+import {
+  type ThemePreference,
+  getThemePreference,
+  setThemePreference
+} from "@/lib/theme";
+
 function AnimatedDots() {
   return (
     <span className="inline-flex">
@@ -45,6 +51,9 @@ function AnimatedDots() {
 }
 
 export default function Settings() {
+  const [themePreference, setThemePreferenceState] = useState<ThemePreference>(
+      () => getThemePreference(),
+  );
   const queryClient = useQueryClient();
   const [showSaved, setShowSaved] = useState(false);
   const [restartMessage, setRestartMessage] = useState(false);
@@ -204,6 +213,12 @@ export default function Settings() {
     },
     [settings, updateSettingsMutation],
   );
+  const handleThemePreferenceChange = useCallback((theme: ThemePreference) => {
+    setThemePreferenceState(theme);
+    setThemePreference(theme);
+    setShowSaved(true);
+    setTimeout(() => setShowSaved(false), 1500);
+  }, []);
 
   const handleResetToDefaults = () => {
     if (settings) {
@@ -418,6 +433,35 @@ export default function Settings() {
           {/* Local Configuration */}
           <div className="relative overflow-hidden rounded-xl bg-white dark:bg-neutral-800">
             <div className="space-y-4 p-4">
+              {/*{dark mode}*/}
+              <Field>
+                <div className="flex items-start space-x-3">
+                  <CogIcon className="mt-1 h-5 w-5 flex-shrink-0 text-black dark:text-neutral-100" />
+                  <div className="w-full">
+                    <Label>Theme</Label>
+                    <Description>
+                      Choose light, dark, or follow the system appearance.
+                    </Description>
+                    <div className="mt-3 grid grid-cols-3 gap-2">
+                      {(["light", "dark", "system"] as const).map((theme) => {
+                        const isSelected = themePreference === theme;
+
+                        return (
+                            <Button
+                                key={theme}
+                                type="button"
+                                color={isSelected ? "dark/zinc" : "white"}
+                                className="justify-center capitalize"
+                                onClick={() => handleThemePreferenceChange(theme)}
+                            >
+                              {theme}
+                            </Button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                </div>
+              </Field>
               <Field>
                 <div className="flex items-start justify-between gap-4">
                   <div className="flex items-start space-x-3 flex-1">

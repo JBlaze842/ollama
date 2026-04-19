@@ -5,6 +5,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { routeTree } from "./routeTree.gen";
 import { fetchUser } from "./api";
 import { StreamingProvider } from "./contexts/StreamingContext";
+import { applyTheme, getThemePreference } from "./lib/theme";
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -34,6 +35,8 @@ declare module "@tanstack/react-router" {
     router: typeof router;
   }
 }
+
+applyTheme(getThemePreference());
 
 const rootElement = document.getElementById("root")!;
 if (!rootElement.innerHTML) {
