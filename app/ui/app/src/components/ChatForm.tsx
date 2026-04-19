@@ -1,4 +1,5 @@
 import Logo from "@/components/Logo";
+import { FileToolsButton } from "@/components/FileToolsButton";
 import { ModelPicker } from "@/components/ModelPicker";
 import { WebSearchButton } from "@/components/WebSearchButton";
 import { ImageThumbnail } from "@/components/ImageThumbnail";
@@ -104,6 +105,7 @@ function ChatForm({
   const thinkButtonRef = useRef<HTMLButtonElement>(null);
   const thinkingLevelButtonRef = useRef<HTMLButtonElement>(null);
   const webSearchButtonRef = useRef<HTMLButtonElement>(null);
+  const fileToolsButtonRef = useRef<HTMLButtonElement>(null);
   const modelPickerRef = useRef<HTMLButtonElement>(null);
   const submitButtonRef = useRef<HTMLButtonElement>(null);
 
@@ -118,6 +120,7 @@ function ChatForm({
   const [loginPromptFeature, setLoginPromptFeature] = useState<
     "webSearch" | "turbo" | null
   >(null);
+  const [fileToolsRequested, setFileToolsRequested] = useState(false);
   const [fileUploadError, setFileUploadError] = useState<ErrorEvent | null>(
     null,
   );
@@ -145,6 +148,9 @@ function ChatForm({
   const {
     settings: {
       webSearchEnabled,
+      fileToolsEnabled,
+      fileToolsMode,
+      workingDir,
       thinkEnabled,
       thinkLevel: settingsThinkLevel,
     },
@@ -152,7 +158,17 @@ function ChatForm({
   } = useSettings();
   const { cloudDisabled } = useCloudStatus();
 
-  const supportsWebSearch = useHasToolsCapability(selectedModel?.model);
+  const supportsToolCalls = useHasToolsCapability(selectedModel?.model);
+  const supportsWebSearch = supportsToolCalls;
+  const hasDraftAttachments = message.attachments.length > 0;
+  const canUseFileTools =
+    supportsToolCalls &&
+    fileToolsEnabled &&
+    fileToolsMode !== "off" &&
+    Boolean(workingDir?.trim());
+  const fileToolsBlockedByAttachments = canUseFileTools && hasDraftAttachments;
+  const fileToolsAvailableForDraft =
+    canUseFileTools && !fileToolsBlockedByAttachments;
   // Use per-chat thinking level instead of global
   const thinkLevel: ThinkingLevel =
     settingsThinkLevel === "none" || !settingsThinkLevel
@@ -178,6 +194,12 @@ function ChatForm({
     webSearchEnabled,
     setSettings,
   ]);
+
+  useEffect(() => {
+    if ((!canUseFileTools || fileToolsBlockedByAttachments) && fileToolsRequested) {
+      setFileToolsRequested(false);
+    }
+  }, [canUseFileTools, fileToolsBlockedByAttachments, fileToolsRequested]);
 
   const removeFile = (index: number) => {
     setMessage((prev) => ({
@@ -341,6 +363,7 @@ function ChatForm({
         textareaRef,
         modelSupportsThinkingLevels ? thinkingLevelButtonRef : thinkButtonRef,
         webSearchButtonRef,
+        fileToolsButtonRef,
         modelPickerRef,
         submitButtonRef,
       ]
@@ -407,6 +430,7 @@ function ChatForm({
             ? thinkingLevelButtonRef.current
             : thinkButtonRef.current,
           webSearchButtonRef.current,
+          fileToolsButtonRef.current,
           modelPickerRef.current,
           submitButtonRef.current,
         ].filter(Boolean) as HTMLElement[];
@@ -475,15 +499,14 @@ function ChatForm({
 
     // Prepare attachments for submission, excluding unsupported images
     const attachmentsToSend: FileAttachment[] = message.attachments
-      .filter(
-        (att) => hasVisionCapability || !isImageFile(att.filename),
-      )
+      .filter((att) => hasVisionCapability || !isImageFile(att.filename))
       .map((att) => ({
         filename: att.filename,
         data: att.data || new Uint8Array(0), // Empty data for existing files
       }));
 
     const useWebSearch = supportsWebSearch && webSearchEnabled;
+    const useFileTools = fileToolsAvailableForDraft && fileToolsRequested;
 
     const useThink = modelSupportsThinkingLevels
       ? thinkLevel
@@ -496,6 +519,7 @@ function ChatForm({
         attachments: attachmentsToSend,
         index: undefined,
         webSearch: useWebSearch,
+        fileTools: useFileTools,
         think: useThink,
       });
     } else {
@@ -503,6 +527,7 @@ function ChatForm({
         message: message.content,
         attachments: attachmentsToSend,
         webSearch: useWebSearch,
+        fileTools: useFileTools,
         think: useThink,
         onChatEvent: (event) => {
           if (event.eventName === "chat_created" && event.chatId) {
@@ -551,6 +576,7 @@ function ChatForm({
           ? thinkingLevelButtonRef.current
           : thinkButtonRef.current,
         webSearchButtonRef.current,
+        fileToolsButtonRef.current,
         modelPickerRef.current,
         submitButtonRef.current,
       ].filter(Boolean);
@@ -732,68 +758,70 @@ function ChatForm({
               const isUnsupportedImage =
                 !hasVisionCapability && isImageFile(attachment.filename);
               return (
-              <div
-                key={attachment.id}
-                className={`group flex items-center gap-2 py-2 px-3 rounded-lg transition-colors flex-shrink-0 ${
-                  isUnsupportedImage
-                    ? "bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800"
-                    : "bg-neutral-50 dark:bg-neutral-700/50 hover:bg-neutral-100 dark:hover:bg-neutral-700"
-                }`}
-              >
-                {isImageFile(attachment.filename) ? (
-                  <ImageThumbnail
-                    image={{
-                      filename: attachment.filename,
-                      data: attachment.data || new Uint8Array(0),
-                    }}
-                    className="w-8 h-8 object-cover rounded-md flex-shrink-0"
-                  />
-                ) : (
-                  <svg
-                    className="w-4 h-4 text-neutral-400 dark:text-neutral-500 flex-shrink-0"
-                    fill="none"
-                    viewBox="0 0 24 24"
-                    stroke="currentColor"
-                  >
-                    <path
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                      strokeWidth={1.5}
-                      d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"
-                    />
-                  </svg>
-                )}
-                <div className="flex flex-col min-w-0">
-                  <span className={`text-sm max-w-36 truncate ${isUnsupportedImage ? "text-red-700 dark:text-red-300" : "text-neutral-700 dark:text-neutral-300"}`}>
-                    {attachment.filename}
-                  </span>
-                  {isUnsupportedImage && (
-                    <span className="text-xs text-red-600 dark:text-red-400 opacity-75">
-                      This model does not support images
-                    </span>
-                  )}
-                </div>
-                <button
-                  type="button"
-                  onClick={() => removeFile(index)}
-                  className="opacity-0 group-hover:opacity-100 transition-opacity text-neutral-400 hover:text-neutral-600 dark:text-neutral-500 dark:hover:text-neutral-300 -mr-1 cursor-pointer"
-                  aria-label={`Remove ${attachment.filename}`}
+                <div
+                  key={attachment.id}
+                  className={`group flex items-center gap-2 py-2 px-3 rounded-lg transition-colors flex-shrink-0 ${
+                    isUnsupportedImage
+                      ? "bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800"
+                      : "bg-neutral-50 dark:bg-neutral-700/50 hover:bg-neutral-100 dark:hover:bg-neutral-700"
+                  }`}
                 >
-                  <svg
-                    className="w-4 h-4"
-                    fill="none"
-                    viewBox="0 0 24 24"
-                    stroke="currentColor"
-                  >
-                    <path
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                      strokeWidth={2}
-                      d="M6 18L18 6M6 6l12 12"
+                  {isImageFile(attachment.filename) ? (
+                    <ImageThumbnail
+                      image={{
+                        filename: attachment.filename,
+                        data: attachment.data || new Uint8Array(0),
+                      }}
+                      className="w-8 h-8 object-cover rounded-md flex-shrink-0"
                     />
-                  </svg>
-                </button>
-              </div>
+                  ) : (
+                    <svg
+                      className="w-4 h-4 text-neutral-400 dark:text-neutral-500 flex-shrink-0"
+                      fill="none"
+                      viewBox="0 0 24 24"
+                      stroke="currentColor"
+                    >
+                      <path
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        strokeWidth={1.5}
+                        d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"
+                      />
+                    </svg>
+                  )}
+                  <div className="flex flex-col min-w-0">
+                    <span
+                      className={`text-sm max-w-36 truncate ${isUnsupportedImage ? "text-red-700 dark:text-red-300" : "text-neutral-700 dark:text-neutral-300"}`}
+                    >
+                      {attachment.filename}
+                    </span>
+                    {isUnsupportedImage && (
+                      <span className="text-xs text-red-600 dark:text-red-400 opacity-75">
+                        This model does not support images
+                      </span>
+                    )}
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => removeFile(index)}
+                    className="opacity-0 group-hover:opacity-100 transition-opacity text-neutral-400 hover:text-neutral-600 dark:text-neutral-500 dark:hover:text-neutral-300 -mr-1 cursor-pointer"
+                    aria-label={`Remove ${attachment.filename}`}
+                  >
+                    <svg
+                      className="w-4 h-4"
+                      fill="none"
+                      viewBox="0 0 24 24"
+                      stroke="currentColor"
+                    >
+                      <path
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        strokeWidth={2}
+                        d="M6 18L18 6M6 6l12 12"
+                      />
+                    </svg>
+                  </button>
+                </div>
               );
             })}
             {message.fileErrors.map((fileError, index) => (
@@ -866,72 +894,80 @@ function ChatForm({
         <div className="flex w-full items-center justify-end gap-2 px-3 pt-2">
           {/* Tool buttons - animate from underneath model picker */}
           <div className="flex-1 flex justify-end items-center gap-2">
-              <div className={`flex gap-2`}>
-                {/* File Upload Buttons */}
-                <button
-                  type="button"
-                  onClick={handleFilesUpload}
-                  className="flex h-9 w-9 items-center justify-center rounded-full bg-white dark:bg-neutral-700 focus:outline-none focus:ring-2 focus:ring-blue-500 cursor-pointer border border-transparent"
-                  title="Upload multiple files"
-                >
-                  <PlusIcon className="w-4.5 h-4.5 stroke-2 text-neutral-500 dark:text-neutral-400" />
-                </button>
-                {/* Thinking Level Button */}
-                {modelSupportsThinkingLevels && (
-                  <>
-                    <ThinkButton
-                      mode="thinkingLevel"
-                      ref={thinkingLevelButtonRef}
-                      isVisible={modelSupportsThinkingLevels}
-                      currentLevel={thinkLevel}
-                      onLevelChange={setThinkingLevel}
-                      onDropdownToggle={handleThinkingLevelDropdownToggle}
-                    />
-                  </>
-                )}
-                {/* Think Button turn on and off */}
-                {supportsThinkToggling && !modelSupportsThinkingLevels && (
-                  <>
-                    <ThinkButton
-                      mode="think"
-                      ref={thinkButtonRef}
-                      isVisible={
-                        supportsThinkToggling && !modelSupportsThinkingLevels
-                      }
-                      isActive={thinkEnabled}
-                      onToggle={() => {
-                        // DeepSeek-v3 specific - thinking and web search are mutually exclusive
-                        if (supportsThinkToggling) {
-                          const enable = !thinkEnabled;
-                          setSettings({
-                            ThinkEnabled: enable,
-                            ...(enable ? { WebSearchEnabled: false } : {}),
-                          });
-                          return;
-                        }
-                        setSettings({ ThinkEnabled: !thinkEnabled });
-                      }}
-                    />
-                  </>
-                )}
-                <WebSearchButton
-                  ref={webSearchButtonRef}
-                  isVisible={true}
-                  isActive={webSearchEnabled}
-                  onToggle={() => {
-                    const enable = !webSearchEnabled;
-                    if (supportsThinkToggling && enable) {
-                      setSettings({
-                        WebSearchEnabled: enable,
-                        ThinkEnabled: false,
-                      });
-                      return;
+            <div className={`flex gap-2`}>
+              {/* File Upload Buttons */}
+              <button
+                type="button"
+                onClick={handleFilesUpload}
+                className="flex h-9 w-9 items-center justify-center rounded-full bg-white dark:bg-neutral-700 focus:outline-none focus:ring-2 focus:ring-blue-500 cursor-pointer border border-transparent"
+                title="Upload multiple files"
+              >
+                <PlusIcon className="w-4.5 h-4.5 stroke-2 text-neutral-500 dark:text-neutral-400" />
+              </button>
+              {/* Thinking Level Button */}
+              {modelSupportsThinkingLevels && (
+                <>
+                  <ThinkButton
+                    mode="thinkingLevel"
+                    ref={thinkingLevelButtonRef}
+                    isVisible={modelSupportsThinkingLevels}
+                    currentLevel={thinkLevel}
+                    onLevelChange={setThinkingLevel}
+                    onDropdownToggle={handleThinkingLevelDropdownToggle}
+                  />
+                </>
+              )}
+              {/* Think Button turn on and off */}
+              {supportsThinkToggling && !modelSupportsThinkingLevels && (
+                <>
+                  <ThinkButton
+                    mode="think"
+                    ref={thinkButtonRef}
+                    isVisible={
+                      supportsThinkToggling && !modelSupportsThinkingLevels
                     }
-                    setSettings({ WebSearchEnabled: enable });
-                  }}
-                />
-              </div>
+                    isActive={thinkEnabled}
+                    onToggle={() => {
+                      // DeepSeek-v3 specific - thinking and web search are mutually exclusive
+                      if (supportsThinkToggling) {
+                        const enable = !thinkEnabled;
+                        setSettings({
+                          ThinkEnabled: enable,
+                          ...(enable ? { WebSearchEnabled: false } : {}),
+                        });
+                        return;
+                      }
+                      setSettings({ ThinkEnabled: !thinkEnabled });
+                    }}
+                  />
+                </>
+              )}
+              <WebSearchButton
+                ref={webSearchButtonRef}
+                isVisible={true}
+                isActive={webSearchEnabled}
+                onToggle={() => {
+                  const enable = !webSearchEnabled;
+                  if (supportsThinkToggling && enable) {
+                    setSettings({
+                      WebSearchEnabled: enable,
+                      ThinkEnabled: false,
+                    });
+                    return;
+                  }
+                  setSettings({ WebSearchEnabled: enable });
+                }}
+              />
+              <FileToolsButton
+                ref={fileToolsButtonRef}
+                isVisible={canUseFileTools}
+                isActive={fileToolsRequested}
+                isDisabled={fileToolsBlockedByAttachments}
+                disabledReason="Remove attachments to use workspace file tools"
+                onToggle={() => setFileToolsRequested((current) => !current)}
+              />
             </div>
+          </div>
           {/* Model picker and submit button */}
           <div className="flex items-center gap-2 relative z-20">
             <ModelPicker

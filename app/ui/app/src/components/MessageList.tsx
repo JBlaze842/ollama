@@ -3,6 +3,7 @@ import React from "react";
 import Message from "./Message";
 import Downloading from "./Downloading";
 import { ErrorMessage } from "./ErrorMessage";
+import type { PendingToolApprovals } from "@/hooks/useChats";
 
 export default function MessageList({
   messages,
@@ -14,6 +15,8 @@ export default function MessageList({
   editingMessageIndex,
   error,
   browserToolResult,
+  pendingApprovals,
+  onApprovalDecision,
 }: {
   messages: MessageType[];
   spacerHeight: number;
@@ -24,6 +27,8 @@ export default function MessageList({
   editingMessageIndex?: number;
   error?: ErrorEvent | null;
   browserToolResult?: any;
+  pendingApprovals?: PendingToolApprovals;
+  onApprovalDecision?: (toolCallId: string, approved: boolean) => Promise<void>;
 }) {
   const [showDots, setShowDots] = React.useState(false);
   const isDownloadingModel = downloadProgress && !downloadProgress.done;
@@ -101,6 +106,8 @@ export default function MessageList({
               }
               browserToolResult={browserToolResult}
               lastToolQuery={lastToolQuery}
+              pendingApprovals={pendingApprovals}
+              onApprovalDecision={onApprovalDecision}
             />
           </div>
         );

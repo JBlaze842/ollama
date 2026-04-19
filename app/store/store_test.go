@@ -56,13 +56,15 @@ func TestStore(t *testing.T) {
 
 	t.Run("settings", func(t *testing.T) {
 		sc := Settings{
-			Expose:     true,
-			Browser:    true,
-			Survey:     true,
-			Models:     "/tmp/models",
-			Agent:      true,
-			Tools:      false,
-			WorkingDir: "/tmp/work",
+			Expose:           true,
+			Browser:          true,
+			Survey:           true,
+			Models:           "/tmp/models",
+			Agent:            true,
+			Tools:            false,
+			WorkingDir:       "/tmp/work",
+			FileToolsEnabled: true,
+			FileToolsMode:    "approve",
 		}
 
 		if err := s.SetSettings(sc); err != nil {
@@ -76,19 +78,26 @@ func TestStore(t *testing.T) {
 		// Compare fields individually since Models might get a default
 		if loaded.Expose != sc.Expose || loaded.Browser != sc.Browser ||
 			loaded.Agent != sc.Agent || loaded.Survey != sc.Survey ||
-			loaded.Tools != sc.Tools || loaded.WorkingDir != sc.WorkingDir {
+			loaded.Tools != sc.Tools || loaded.WorkingDir != sc.WorkingDir ||
+			loaded.FileToolsEnabled != sc.FileToolsEnabled || loaded.FileToolsMode != sc.FileToolsMode {
 			t.Errorf("expected %v, got %v", sc, loaded)
 		}
 	})
 
 	t.Run("settings default home view is launch", func(t *testing.T) {
-		loaded, err := s.Settings()
+		freshStore, cleanup := setupTestStore(t)
+		defer cleanup()
+
+		loaded, err := freshStore.Settings()
 		if err != nil {
 			t.Fatal(err)
 		}
 
 		if loaded.LastHomeView != "launch" {
 			t.Fatalf("expected default LastHomeView to be launch, got %q", loaded.LastHomeView)
+		}
+		if loaded.FileToolsMode != "off" {
+			t.Fatalf("expected default FileToolsMode to be off, got %q", loaded.FileToolsMode)
 		}
 	})
 

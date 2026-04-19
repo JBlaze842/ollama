@@ -6,6 +6,8 @@ interface BatcherConfig {
   immediateFirst?: boolean; // if true, first update is immediate
 }
 
+type TimeoutHandle = ReturnType<typeof setTimeout>;
+
 export const useQueryBatcher = <T>(
   queryKey: readonly unknown[],
   config: BatcherConfig = {},
@@ -15,7 +17,7 @@ export const useQueryBatcher = <T>(
 
   const batchRef = useRef<{
     updateBatch: T | undefined;
-    batchTimeout: number | null;
+    batchTimeout: TimeoutHandle | null;
     isFirstUpdate: boolean;
   }>({
     updateBatch: undefined,
@@ -81,7 +83,7 @@ export const createQueryBatcher = <T>(
   const { batchInterval = 8, immediateFirst = false } = config;
 
   let updateBatch: T | undefined = undefined;
-  let batchTimeout: number | null = null;
+  let batchTimeout: TimeoutHandle | null = null;
   let isFirstUpdate = true;
 
   const flushBatch = () => {

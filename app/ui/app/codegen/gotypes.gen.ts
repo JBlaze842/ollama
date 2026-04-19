@@ -64,11 +64,13 @@ export class ToolFunction {
     }
 }
 export class ToolCall {
+    id?: string;
     type: string;
     function: ToolFunction;
 
     constructor(source: any = {}) {
         if ('string' === typeof source) source = JSON.parse(source);
+        this.id = source["id"];
         this.type = source["type"];
         this.function = this.convertValues(source["function"], ToolFunction);
     }
@@ -111,6 +113,7 @@ export class Message {
     tool_calls?: ToolCall[];
     tool_call?: ToolCall;
     tool_name?: string;
+    tool_call_id?: string;
     tool_result?: number[];
     created_at: Time;
     updated_at: Time;
@@ -128,6 +131,7 @@ export class Message {
         this.tool_calls = this.convertValues(source["tool_calls"], ToolCall);
         this.tool_call = this.convertValues(source["tool_call"], ToolCall);
         this.tool_name = source["tool_name"];
+        this.tool_call_id = source["tool_call_id"];
         this.tool_result = source["tool_result"];
         this.created_at = this.convertValues(source["created_at"], Time);
         this.updated_at = this.convertValues(source["updated_at"], Time);
@@ -324,7 +328,7 @@ export class ModelCapabilitiesResponse {
     }
 }
 export class ChatEvent {
-    eventName: "chat" | "thinking" | "assistant_with_tools" | "tool_call" | "tool" | "tool_result" | "done" | "chat_created";
+    eventName: "chat" | "thinking" | "assistant_with_tools" | "tool_call" | "tool" | "tool_result" | "approval_requested" | "approval_resolved" | "done" | "chat_created";
     content?: string;
     thinking?: string;
     thinkingTimeStart?: Date | undefined;
@@ -332,8 +336,11 @@ export class ChatEvent {
     toolCalls?: ToolCall[];
     toolCall?: ToolCall;
     toolName?: string;
+    toolCallId?: string;
     toolResult?: boolean;
     toolResultData?: any;
+    toolPreviewData?: any;
+    approvalApproved?: boolean;
     chatId?: string;
     toolState?: any;
 
@@ -347,8 +354,11 @@ export class ChatEvent {
         this.toolCalls = this.convertValues(source["toolCalls"], ToolCall);
         this.toolCall = this.convertValues(source["toolCall"], ToolCall);
         this.toolName = source["toolName"];
+        this.toolCallId = source["toolCallId"];
         this.toolResult = source["toolResult"];
         this.toolResultData = source["toolResultData"];
+        this.toolPreviewData = source["toolPreviewData"];
+        this.approvalApproved = source["approvalApproved"];
         this.chatId = source["chatId"];
         this.toolState = source["toolState"];
     }
@@ -407,6 +417,8 @@ export class Settings {
     Agent: boolean;
     Tools: boolean;
     WorkingDir: string;
+    FileToolsEnabled: boolean;
+    FileToolsMode: string;
     ContextLength: number;
     TurboEnabled: boolean;
     WebSearchEnabled: boolean;
@@ -426,6 +438,8 @@ export class Settings {
         this.Agent = source["Agent"];
         this.Tools = source["Tools"];
         this.WorkingDir = source["WorkingDir"];
+        this.FileToolsEnabled = source["FileToolsEnabled"];
+        this.FileToolsMode = source["FileToolsMode"];
         this.ContextLength = source["ContextLength"];
         this.TurboEnabled = source["TurboEnabled"];
         this.WebSearchEnabled = source["WebSearchEnabled"];
@@ -549,6 +563,26 @@ export class Error {
     constructor(source: any = {}) {
         if ('string' === typeof source) source = JSON.parse(source);
         this.error = source["error"];
+    }
+}
+export class ToolApprovalRequest {
+    toolCallId: string;
+    approved: boolean;
+
+    constructor(source: any = {}) {
+        if ('string' === typeof source) source = JSON.parse(source);
+        this.toolCallId = source["toolCallId"];
+        this.approved = source["approved"];
+    }
+}
+export class ToolApprovalResponse {
+    toolCallId: string;
+    approved: boolean;
+
+    constructor(source: any = {}) {
+        if ('string' === typeof source) source = JSON.parse(source);
+        this.toolCallId = source["toolCallId"];
+        this.approved = source["approved"];
     }
 }
 export class ModelUpstreamResponse {

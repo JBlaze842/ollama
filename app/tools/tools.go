@@ -26,6 +26,12 @@ type Tool interface {
 	Prompt() string
 }
 
+// ApprovalTool describes a tool that can preview a filesystem mutation before it executes.
+type ApprovalTool interface {
+	RequiresApproval() bool
+	Preview(args map[string]any) (any, string, error)
+}
+
 // Registry manages the available tools and their execution
 type Registry struct {
 	tools      map[string]Tool

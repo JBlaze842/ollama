@@ -17,6 +17,7 @@ import (
 
 	"github.com/ollama/ollama/api"
 	"github.com/ollama/ollama/app/store"
+	"github.com/ollama/ollama/app/ui/responses"
 	"github.com/ollama/ollama/app/updater"
 )
 
@@ -29,30 +30,36 @@ func TestHandlePostApiSettings(t *testing.T) {
 		{
 			name: "valid settings update - all fields",
 			requested: store.Settings{
-				Expose:     true,
-				Browser:    true,
-				Models:     "/custom/models",
-				Agent:      true,
-				Tools:      true,
-				WorkingDir: "/workspace",
+				Expose:           true,
+				Browser:          true,
+				Models:           "/custom/models",
+				Agent:            true,
+				Tools:            true,
+				WorkingDir:       "/workspace",
+				FileToolsEnabled: true,
+				FileToolsMode:    "approve",
 			},
 			wantErr: false,
 		},
 		{
 			name: "partial settings update",
 			requested: store.Settings{
-				Agent:      true,
-				Tools:      false,
-				WorkingDir: "/new/path",
+				Agent:            true,
+				Tools:            false,
+				WorkingDir:       "/new/path",
+				FileToolsEnabled: true,
+				FileToolsMode:    "read_only",
 			},
 			wantErr: false,
 		},
 		{
 			name: "settings with special characters in paths",
 			requested: store.Settings{
-				Models:     "/path with spaces/models",
-				WorkingDir: "/tmp/work-dir_123",
-				Agent:      true,
+				Models:           "/path with spaces/models",
+				WorkingDir:       "/tmp/work-dir_123",
+				Agent:            true,
+				FileToolsEnabled: true,
+				FileToolsMode:    "full_auto",
 			},
 			wantErr: false,
 		},
@@ -109,6 +116,12 @@ func TestHandlePostApiSettings(t *testing.T) {
 					if savedSettings.WorkingDir != tt.requested.WorkingDir {
 						t.Errorf("WorkingDir: got %q, want %q", savedSettings.WorkingDir, tt.requested.WorkingDir)
 					}
+					if savedSettings.FileToolsEnabled != tt.requested.FileToolsEnabled {
+						t.Errorf("FileToolsEnabled: got %v, want %v", savedSettings.FileToolsEnabled, tt.requested.FileToolsEnabled)
+					}
+					if savedSettings.FileToolsMode != tt.requested.FileToolsMode {
+						t.Errorf("FileToolsMode: got %q, want %q", savedSettings.FileToolsMode, tt.requested.FileToolsMode)
+					}
 					// Only check Models if explicitly set in the test case
 					if tt.requested.Models != "" && savedSettings.Models != tt.requested.Models {
 						t.Errorf("Models: got %q, want %q", savedSettings.Models, tt.requested.Models)
@@ -116,6 +129,131 @@ func TestHandlePostApiSettings(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestHandleGetApiSettingsUsesPersistedWorkspaceSettings(t *testing.T) {
+	testStore := &store.Store{
+		DBPath: filepath.Join(t.TempDir(), "db.sqlite"),
+	}
+	defer testStore.Close()
+
+	saved := store.Settings{
+		WorkingDir:       "/workspace",
+		FileToolsEnabled: true,
+		FileToolsMode:    "read_only",
+	}
+	if err := testStore.SetSettings(saved); err != nil {
+		t.Fatalf("SetSettings() error = %v", err)
+	}
+
+	req := httptest.NewRequest("GET", "/api/v1/settings", nil)
+	rr := httptest.NewRecorder()
+
+	server := &Server{
+		Store:      testStore,
+		WorkingDir: "/runtime-should-not-win",
+		Agent:      true,
+		Tools:      true,
+	}
+
+	if err := server.getSettings(rr, req); err != nil {
+		t.Fatalf("getSettings() error = %v", err)
+	}
+
+	var response responses.SettingsResponse
+	if err := json.Unmarshal(rr.Body.Bytes(), &response); err != nil {
+		t.Fatalf("invalid response JSON: %v", err)
+	}
+
+	if response.Settings.WorkingDir != saved.WorkingDir {
+		t.Fatalf("WorkingDir = %q, want %q", response.Settings.WorkingDir, saved.WorkingDir)
+	}
+	if response.Settings.FileToolsEnabled != saved.FileToolsEnabled {
+		t.Fatalf("FileToolsEnabled = %v, want %v", response.Settings.FileToolsEnabled, saved.FileToolsEnabled)
+	}
+	if response.Settings.FileToolsMode != saved.FileToolsMode {
+		t.Fatalf("FileToolsMode = %q, want %q", response.Settings.FileToolsMode, saved.FileToolsMode)
+	}
+}
+
+func TestBuildChatRequestPreservesToolCallIDs(t *testing.T) {
+	server := &Server{}
+	chat := &store.Chat{
+		ID: "chat-1",
+		Messages: []store.Message{
+			store.NewMessage("assistant", "", &store.MessageOptions{
+				Model: "test-model",
+				ToolCalls: []store.ToolCall{
+					{
+						ID:   "call-1",
+						Type: "function",
+						Function: store.ToolFunction{
+							Name:      "fs_read",
+							Arguments: `{"path":"README.md"}`,
+						},
+					},
+				},
+			}),
+			func() store.Message {
+				msg := store.NewMessage("tool", "file contents", &store.MessageOptions{
+					ToolCallID: "call-1",
+				})
+				msg.ToolName = "fs_read"
+				return msg
+			}(),
+		},
+	}
+
+	req, err := server.buildChatRequest(chat, "test-model", nil, nil)
+	if err != nil {
+		t.Fatalf("buildChatRequest() error = %v", err)
+	}
+
+	if len(req.Messages) != 2 {
+		t.Fatalf("len(req.Messages) = %d, want 2", len(req.Messages))
+	}
+	if len(req.Messages[0].ToolCalls) != 1 || req.Messages[0].ToolCalls[0].ID != "call-1" {
+		t.Fatalf("assistant tool calls = %#v, want preserved tool call ID", req.Messages[0].ToolCalls)
+	}
+	if req.Messages[1].ToolCallID != "call-1" {
+		t.Fatalf("tool message ToolCallID = %q, want %q", req.Messages[1].ToolCallID, "call-1")
+	}
+}
+
+func TestToolApprovalHandlerSignalsPendingDecision(t *testing.T) {
+	server := &Server{}
+	pending, err := server.registerPendingToolApproval("chat-1", store.ToolCall{
+		ID:   "call-1",
+		Type: "function",
+		Function: store.ToolFunction{
+			Name:      "fs_write",
+			Arguments: `{"path":"notes.txt","content":"hello"}`,
+		},
+	})
+	if err != nil {
+		t.Fatalf("registerPendingToolApproval() error = %v", err)
+	}
+
+	req := httptest.NewRequest("POST", "/api/v1/chat/chat-1/tool-approval", strings.NewReader(`{"toolCallId":"call-1","approved":true}`))
+	req.SetPathValue("id", "chat-1")
+	req.Header.Set("Content-Type", "application/json")
+	rr := httptest.NewRecorder()
+
+	if err := server.toolApproval(rr, req); err != nil {
+		t.Fatalf("toolApproval() error = %v", err)
+	}
+	if rr.Code != http.StatusOK {
+		t.Fatalf("toolApproval() status = %d, want %d", rr.Code, http.StatusOK)
+	}
+
+	select {
+	case approved := <-pending.decision:
+		if !approved {
+			t.Fatal("pending approval decision = false, want true")
+		}
+	default:
+		t.Fatal("pending approval decision was not signaled")
 	}
 }
 

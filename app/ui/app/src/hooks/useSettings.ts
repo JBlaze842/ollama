@@ -7,6 +7,9 @@ import { useMemo, useCallback } from "react";
 interface SettingsState {
   turboEnabled: boolean;
   webSearchEnabled: boolean;
+  fileToolsEnabled: boolean;
+  fileToolsMode: string;
+  workingDir: string;
   selectedModel: string;
   sidebarOpen: boolean;
   lastHomeView: string;
@@ -18,6 +21,9 @@ interface SettingsState {
 type SettingsUpdate = Partial<{
   TurboEnabled: boolean;
   WebSearchEnabled: boolean;
+  FileToolsEnabled: boolean;
+  FileToolsMode: string;
+  WorkingDir: string;
   ThinkEnabled: boolean;
   ThinkLevel: string;
   SelectedModel: string;
@@ -48,6 +54,9 @@ export function useSettings() {
     () => ({
       turboEnabled: settingsData?.settings?.TurboEnabled ?? false,
       webSearchEnabled: settingsData?.settings?.WebSearchEnabled ?? false,
+      fileToolsEnabled: settingsData?.settings?.FileToolsEnabled ?? false,
+      fileToolsMode: settingsData?.settings?.FileToolsMode ?? "off",
+      workingDir: settingsData?.settings?.WorkingDir ?? "",
       thinkEnabled: settingsData?.settings?.ThinkEnabled ?? false,
       thinkLevel: settingsData?.settings?.ThinkLevel ?? "none",
       selectedModel: settingsData?.settings?.SelectedModel ?? "",

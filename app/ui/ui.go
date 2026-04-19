@@ -112,6 +112,16 @@ type Server struct {
 	// Updater for checking and downloading updates
 	Updater             *updater.Updater
 	UpdateAvailableFunc func()
+
+	pendingToolApprovalsMu sync.Mutex
+	pendingToolApprovals   map[string]*pendingToolApproval
+}
+
+type pendingToolApproval struct {
+	chatID   string
+	toolCall store.ToolCall
+	decision chan bool
+	decided  bool
 }
 
 func (s *Server) log() *slog.Logger {
@@ -282,6 +292,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /api/v1/chats", handle(s.listChats))
 	mux.Handle("GET /api/v1/chat/{id}", handle(s.getChat))
 	mux.Handle("POST /api/v1/chat/{id}", handle(s.chat))
+	mux.Handle("POST /api/v1/chat/{id}/tool-approval", handle(s.toolApproval))
 	mux.Handle("DELETE /api/v1/chat/{id}", handle(s.deleteChat))
 	mux.Handle("POST /api/v1/create-chat", handle(s.createChat))
 	mux.Handle("PUT /api/v1/chat/{id}/rename", handle(s.renameChat))
@@ -439,6 +450,127 @@ func (s *Server) createChat(w http.ResponseWriter, r *http.Request) error {
 	}
 
 	json.NewEncoder(w).Encode(map[string]string{"id": id.String()})
+	return nil
+}
+
+func (s *Server) toolApproval(w http.ResponseWriter, r *http.Request) error {
+	var req responses.ToolApprovalRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		return json.NewEncoder(w).Encode(responses.Error{Error: "invalid tool approval request"})
+	}
+
+	chatID := r.PathValue("id")
+	if chatID == "" || strings.TrimSpace(req.ToolCallID) == "" {
+		w.WriteHeader(http.StatusBadRequest)
+		return json.NewEncoder(w).Encode(responses.Error{Error: "chat id and toolCallId are required"})
+	}
+
+	if err := s.submitPendingToolApproval(chatID, req.ToolCallID, req.Approved); err != nil {
+		w.WriteHeader(http.StatusNotFound)
+		return json.NewEncoder(w).Encode(responses.Error{Error: err.Error()})
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	return json.NewEncoder(w).Encode(responses.ToolApprovalResponse{
+		ToolCallID: req.ToolCallID,
+		Approved:   req.Approved,
+	})
+}
+
+func fileToolsRequested(requested *bool, settings store.Settings) bool {
+	return requested != nil &&
+		*requested &&
+		settings.FileToolsEnabled &&
+		strings.TrimSpace(settings.WorkingDir) != "" &&
+		tools.NormalizeFileToolsMode(settings.FileToolsMode) != tools.FileToolsModeOff
+}
+
+func ensureToolCallIDs(toolCalls []api.ToolCall) {
+	for i := range toolCalls {
+		if strings.TrimSpace(toolCalls[i].ID) == "" {
+			toolCalls[i].ID = uuid.NewString()
+		}
+	}
+}
+
+func storeToolCallsFromAPI(toolCalls []api.ToolCall) []store.ToolCall {
+	storeToolCalls := make([]store.ToolCall, len(toolCalls))
+	for i, tc := range toolCalls {
+		argsJSON, _ := json.Marshal(tc.Function.Arguments)
+		storeToolCalls[i] = store.ToolCall{
+			ID:   tc.ID,
+			Type: "function",
+			Function: store.ToolFunction{
+				Name:      tc.Function.Name,
+				Arguments: string(argsJSON),
+			},
+		}
+	}
+	return storeToolCalls
+}
+
+func (s *Server) emitChatEvent(w http.ResponseWriter, flusher http.Flusher, event any) error {
+	if err := json.NewEncoder(w).Encode(event); err != nil {
+		return err
+	}
+	flusher.Flush()
+	return nil
+}
+
+func (s *Server) registerPendingToolApproval(chatID string, toolCall store.ToolCall) (*pendingToolApproval, error) {
+	if strings.TrimSpace(toolCall.ID) == "" {
+		return nil, fmt.Errorf("tool approval requires a tool call ID")
+	}
+
+	pending := &pendingToolApproval{
+		chatID:   chatID,
+		toolCall: toolCall,
+		decision: make(chan bool, 1),
+	}
+
+	s.pendingToolApprovalsMu.Lock()
+	defer s.pendingToolApprovalsMu.Unlock()
+
+	if s.pendingToolApprovals == nil {
+		s.pendingToolApprovals = make(map[string]*pendingToolApproval)
+	}
+
+	if _, exists := s.pendingToolApprovals[toolCall.ID]; exists {
+		return nil, fmt.Errorf("tool approval %q is already pending", toolCall.ID)
+	}
+
+	s.pendingToolApprovals[toolCall.ID] = pending
+	return pending, nil
+}
+
+func (s *Server) clearPendingToolApproval(toolCallID string) {
+	s.pendingToolApprovalsMu.Lock()
+	defer s.pendingToolApprovalsMu.Unlock()
+
+	if s.pendingToolApprovals == nil {
+		return
+	}
+
+	delete(s.pendingToolApprovals, toolCallID)
+}
+
+func (s *Server) submitPendingToolApproval(chatID string, toolCallID string, approved bool) error {
+	s.pendingToolApprovalsMu.Lock()
+	pending, ok := s.pendingToolApprovals[toolCallID]
+	if !ok || pending.chatID != chatID {
+		s.pendingToolApprovalsMu.Unlock()
+		return fmt.Errorf("no pending tool approval found")
+	}
+	if pending.decided {
+		s.pendingToolApprovalsMu.Unlock()
+		return fmt.Errorf("tool approval has already been decided")
+	}
+
+	pending.decided = true
+	s.pendingToolApprovalsMu.Unlock()
+
+	pending.decision <- approved
 	return nil
 }
 
@@ -838,9 +970,15 @@ func (s *Server) chat(w http.ResponseWriter, r *http.Request) error {
 	// Note: Skip agent/tools mode if user has attachments, as the agent doesn't handle file attachments properly
 	registry := tools.NewRegistry()
 	var browser *tools.Browser
+	settings, err := s.Store.Settings()
+	if err != nil {
+		return fmt.Errorf("failed to load settings: %w", err)
+	}
+	fileToolsMode := tools.NormalizeFileToolsMode(settings.FileToolsMode)
 
 	if !hasAttachments {
 		WebSearchEnabled := req.WebSearch != nil && *req.WebSearch
+		FileToolsEnabled := fileToolsRequested(req.FileTools, settings)
 		hasToolsCapability := slices.Contains(details.Capabilities, model.CapabilityTools)
 
 		s.log().Info("model capabilities evaluated",
@@ -848,6 +986,7 @@ func (s *Server) chat(w http.ResponseWriter, r *http.Request) error {
 			"capabilities", details.Capabilities,
 			"has_tools_capability", hasToolsCapability,
 			"web_search_requested", WebSearchEnabled,
+			"file_tools_requested", FileToolsEnabled,
 		)
 
 		if WebSearchEnabled && hasToolsCapability {
@@ -863,6 +1002,12 @@ func (s *Server) chat(w http.ResponseWriter, r *http.Request) error {
 			} else {
 				registry.Register(&tools.WebSearch{})
 				registry.Register(&tools.WebFetch{})
+			}
+		}
+
+		if FileToolsEnabled && hasToolsCapability {
+			if err := tools.RegisterFileTools(registry, settings.WorkingDir, fileToolsMode); err != nil {
+				return fmt.Errorf("configure workspace file tools: %w", err)
 			}
 		}
 	}
@@ -948,8 +1093,13 @@ func (s *Server) chat(w http.ResponseWriter, r *http.Request) error {
 				thinkingTimeEnd = &now
 			}
 
-			json.NewEncoder(w).Encode(chatEventFromApiChatResponse(res, thinkingTimeStart, thinkingTimeEnd))
-			flusher.Flush()
+			if len(res.Message.ToolCalls) > 0 {
+				ensureToolCallIDs(res.Message.ToolCalls)
+			}
+
+			if err := s.emitChatEvent(w, flusher, chatEventFromApiChatResponse(res, thinkingTimeStart, thinkingTimeEnd)); err != nil {
+				return err
+			}
 
 			switch event {
 			case EventToolCall:
@@ -964,27 +1114,19 @@ func (s *Server) chat(w http.ResponseWriter, r *http.Request) error {
 					thinkingTimeEnd = nil
 				}
 
+				storeToolCalls := storeToolCallsFromAPI(res.Message.ToolCalls)
 				// attach tool_calls to an existing assistant if present,
-				// otherwise (for standalone web_search/web_fetch) buffer for request-only injection.
-				if len(res.Message.ToolCalls) > 0 {
+				// otherwise buffer them for request-only injection in the next pass.
+				if len(storeToolCalls) > 0 {
 					if len(chat.Messages) > 0 && chat.Messages[len(chat.Messages)-1].Role == "assistant" {
-						toolCalls := make([]store.ToolCall, len(res.Message.ToolCalls))
-						for i, tc := range res.Message.ToolCalls {
-							argsJSON, _ := json.Marshal(tc.Function.Arguments)
-							toolCalls[i] = store.ToolCall{
-								Type: "function",
-								Function: store.ToolFunction{
-									Name:      tc.Function.Name,
-									Arguments: string(argsJSON),
-								},
-							}
-						}
 						lastMsg := &chat.Messages[len(chat.Messages)-1]
-						lastMsg.ToolCalls = toolCalls
+						lastMsg.ToolCalls = storeToolCalls
 						if err := s.Store.UpdateLastMessage(chat.ID, *lastMsg); err != nil {
 							return err
 						}
 					} else {
+						pendingAssistantToolCalls = storeToolCalls
+
 						onlyStandalone := true
 						for _, tc := range res.Message.ToolCalls {
 							if !(tc.Function.Name == "web_search" || tc.Function.Name == "web_fetch") {
@@ -993,70 +1135,175 @@ func (s *Server) chat(w http.ResponseWriter, r *http.Request) error {
 							}
 						}
 						if onlyStandalone {
-							toolCalls := make([]store.ToolCall, len(res.Message.ToolCalls))
-							for i, tc := range res.Message.ToolCalls {
-								argsJSON, _ := json.Marshal(tc.Function.Arguments)
-								toolCalls[i] = store.ToolCall{
-									Type: "function",
-									Function: store.ToolFunction{
-										Name:      tc.Function.Name,
-										Arguments: string(argsJSON),
-									},
-								}
-							}
-
-							synth := store.NewMessage("assistant", "", &store.MessageOptions{Model: req.Model, ToolCalls: toolCalls})
+							synth := store.NewMessage("assistant", "", &store.MessageOptions{Model: req.Model, ToolCalls: storeToolCalls})
 							chat.Messages = append(chat.Messages, synth)
 							if err := s.Store.AppendMessage(chat.ID, synth); err != nil {
 								return err
 							}
 
-							// clear buffer to avoid-injecting again
+							// clear buffer to avoid re-injecting again
 							pendingAssistantToolCalls = nil
 						}
 					}
 				}
 
-				for _, toolCall := range res.Message.ToolCalls {
+				for i, toolCall := range res.Message.ToolCalls {
 					// continues loop as tools were executed
 					toolsExecuted = true
-					result, content, err := registry.Execute(ctx, toolCall.Function.Name, toolCall.Function.Arguments.ToMap())
-					if err != nil {
-						errContent := fmt.Sprintf("Error: %v", err)
-						toolErrMsg := store.NewMessage("tool", errContent, nil)
-						toolErrMsg.ToolName = toolCall.Function.Name
+					storeToolCall := storeToolCalls[i]
+					toolCallID := storeToolCall.ID
+					toolName := toolCall.Function.Name
+
+					registeredTool, ok := registry.Get(toolName)
+					if !ok {
+						errContent := fmt.Sprintf("Error: unknown tool: %s", toolName)
+						toolErrMsg := store.NewMessage("tool", errContent, &store.MessageOptions{
+							ToolCallID: toolCallID,
+						})
+						toolErrMsg.ToolName = toolName
 						chat.Messages = append(chat.Messages, toolErrMsg)
 						if err := s.Store.AppendMessage(chat.ID, toolErrMsg); err != nil {
 							return err
 						}
 
-						// Emit tool error event
 						toolResult := true
-						json.NewEncoder(w).Encode(responses.ChatEvent{
-							EventName: "tool",
-							Content:   &errContent,
-							ToolName:  &toolCall.Function.Name,
-						})
-						flusher.Flush()
-
-						json.NewEncoder(w).Encode(responses.ChatEvent{
+						if err := s.emitChatEvent(w, flusher, responses.ChatEvent{
 							EventName:      "tool_result",
 							Content:        &errContent,
-							ToolName:       &toolCall.Function.Name,
+							ToolName:       &toolName,
+							ToolCallID:     &toolCallID,
 							ToolResult:     &toolResult,
-							ToolResultData: nil, // No result data for errors
+							ToolResultData: nil,
+						}); err != nil {
+							return err
+						}
+						continue
+					}
+
+					args := toolCall.Function.Arguments.ToMap()
+					if fileToolsMode == tools.FileToolsModeApprove {
+						if approvalTool, ok := registeredTool.(tools.ApprovalTool); ok && approvalTool.RequiresApproval() {
+							previewData, previewContent, err := approvalTool.Preview(args)
+							if err != nil {
+								errContent := fmt.Sprintf("Error: %v", err)
+								toolErrMsg := store.NewMessage("tool", errContent, &store.MessageOptions{
+									ToolCallID: toolCallID,
+								})
+								toolErrMsg.ToolName = toolName
+								chat.Messages = append(chat.Messages, toolErrMsg)
+								if err := s.Store.AppendMessage(chat.ID, toolErrMsg); err != nil {
+									return err
+								}
+
+								toolResult := true
+								if err := s.emitChatEvent(w, flusher, responses.ChatEvent{
+									EventName:      "tool_result",
+									Content:        &errContent,
+									ToolName:       &toolName,
+									ToolCallID:     &toolCallID,
+									ToolResult:     &toolResult,
+									ToolResultData: nil,
+								}); err != nil {
+									return err
+								}
+								continue
+							}
+
+							pendingApproval, err := s.registerPendingToolApproval(chat.ID, storeToolCall)
+							if err != nil {
+								return err
+							}
+
+							if err := s.emitChatEvent(w, flusher, responses.ChatEvent{
+								EventName:       "approval_requested",
+								Content:         &previewContent,
+								ToolName:        &toolName,
+								ToolCall:        &storeToolCall,
+								ToolCallID:      &toolCallID,
+								ToolPreviewData: previewData,
+							}); err != nil {
+								s.clearPendingToolApproval(toolCallID)
+								return err
+							}
+
+							var approved bool
+							select {
+							case approved = <-pendingApproval.decision:
+							case <-ctx.Done():
+								s.clearPendingToolApproval(toolCallID)
+								return ctx.Err()
+							}
+							s.clearPendingToolApproval(toolCallID)
+
+							if err := s.emitChatEvent(w, flusher, responses.ChatEvent{
+								EventName:        "approval_resolved",
+								ToolName:         &toolName,
+								ToolCallID:       &toolCallID,
+								ApprovalApproved: &approved,
+							}); err != nil {
+								return err
+							}
+
+							if !approved {
+								errContent := fmt.Sprintf("Request to run %s was rejected by the user.", toolName)
+								toolErrMsg := store.NewMessage("tool", errContent, &store.MessageOptions{
+									ToolCallID: toolCallID,
+								})
+								toolErrMsg.ToolName = toolName
+								chat.Messages = append(chat.Messages, toolErrMsg)
+								if err := s.Store.AppendMessage(chat.ID, toolErrMsg); err != nil {
+									return err
+								}
+
+								toolResult := true
+								if err := s.emitChatEvent(w, flusher, responses.ChatEvent{
+									EventName:      "tool_result",
+									Content:        &errContent,
+									ToolName:       &toolName,
+									ToolCallID:     &toolCallID,
+									ToolResult:     &toolResult,
+									ToolResultData: nil,
+								}); err != nil {
+									return err
+								}
+								continue
+							}
+						}
+					}
+
+					result, content, err := registeredTool.Execute(ctx, args)
+					if err != nil {
+						errContent := fmt.Sprintf("Error: %v", err)
+						toolErrMsg := store.NewMessage("tool", errContent, &store.MessageOptions{
+							ToolCallID: toolCallID,
 						})
-						flusher.Flush()
+						toolErrMsg.ToolName = toolName
+						chat.Messages = append(chat.Messages, toolErrMsg)
+						if err := s.Store.AppendMessage(chat.ID, toolErrMsg); err != nil {
+							return err
+						}
+
+						toolResult := true
+						if err := s.emitChatEvent(w, flusher, responses.ChatEvent{
+							EventName:      "tool_result",
+							Content:        &errContent,
+							ToolName:       &toolName,
+							ToolCallID:     &toolCallID,
+							ToolResult:     &toolResult,
+							ToolResultData: nil,
+						}); err != nil {
+							return err
+						}
 						continue
 					}
 
 					var tr json.RawMessage
-					if strings.HasPrefix(toolCall.Function.Name, "browser.search") {
+					if strings.HasPrefix(toolName, "browser.search") {
 						// For standalone web_search, ensure the tool message has readable content
 						// so the second-pass model can consume results, while keeping browser state flow intact.
 						// We still persist tool msg with content below.
 						// (No browser state update needed for standalone.)
-					} else if strings.HasPrefix(toolCall.Function.Name, "browser") {
+					} else if strings.HasPrefix(toolName, "browser") {
 						stateBytes, err := json.Marshal(browser.State())
 						if err != nil {
 							return fmt.Errorf("failed to marshal browser state: %w", err)
@@ -1074,7 +1321,7 @@ func (s *Server) chat(w http.ResponseWriter, r *http.Request) error {
 					}
 					// ensure tool message sent back to the model has content (if empty, use a sensible fallback)
 					modelContent := content
-					if toolCall.Function.Name == "web_fetch" && modelContent == "" {
+					if toolName == "web_fetch" && modelContent == "" {
 						if str, ok := result.(string); ok {
 							modelContent = str
 						}
@@ -1084,21 +1331,26 @@ func (s *Server) chat(w http.ResponseWriter, r *http.Request) error {
 						modelContent = string(tr)
 					}
 					toolMsg := store.NewMessage("tool", modelContent, &store.MessageOptions{
+						ToolCallID: toolCallID,
 						ToolResult: &tr,
 					})
-					toolMsg.ToolName = toolCall.Function.Name
+					toolMsg.ToolName = toolName
 					chat.Messages = append(chat.Messages, toolMsg)
 
-					s.Store.AppendMessage(chat.ID, toolMsg)
+					if err := s.Store.AppendMessage(chat.ID, toolMsg); err != nil {
+						return err
+					}
 
 					// Emit tool message event (matching agent pattern)
 					toolResult := true
-					json.NewEncoder(w).Encode(responses.ChatEvent{
-						EventName: "tool",
-						Content:   &content,
-						ToolName:  &toolCall.Function.Name,
-					})
-					flusher.Flush()
+					if err := s.emitChatEvent(w, flusher, responses.ChatEvent{
+						EventName:  "tool",
+						Content:    &content,
+						ToolName:   &toolName,
+						ToolCallID: &toolCallID,
+					}); err != nil {
+						return err
+					}
 
 					var toolState any = nil
 					if browser != nil {
@@ -1106,15 +1358,17 @@ func (s *Server) chat(w http.ResponseWriter, r *http.Request) error {
 					}
 					// Stream tool result to frontend
 
-					json.NewEncoder(w).Encode(responses.ChatEvent{
+					if err := s.emitChatEvent(w, flusher, responses.ChatEvent{
 						EventName:      "tool_result",
 						Content:        &content,
-						ToolName:       &toolCall.Function.Name,
+						ToolName:       &toolName,
+						ToolCallID:     &toolCallID,
 						ToolResult:     &toolResult,
 						ToolResultData: result,
 						ToolState:      toolState,
-					})
-					flusher.Flush()
+					}); err != nil {
+						return err
+					}
 				}
 
 			case EventChat:
@@ -1354,18 +1608,7 @@ func (s *Server) deleteChat(w http.ResponseWriter, r *http.Request) error {
 func chatEventFromApiChatResponse(res api.ChatResponse, thinkingTimeStart *time.Time, thinkingTimeEnd *time.Time) responses.ChatEvent {
 	// If there are tool calls, send assistant_with_tools event
 	if len(res.Message.ToolCalls) > 0 {
-		// Convert API tool calls to store tool calls
-		storeToolCalls := make([]store.ToolCall, len(res.Message.ToolCalls))
-		for i, tc := range res.Message.ToolCalls {
-			argsJSON, _ := json.Marshal(tc.Function.Arguments)
-			storeToolCalls[i] = store.ToolCall{
-				Type: "function",
-				Function: store.ToolFunction{
-					Name:      tc.Function.Name,
-					Arguments: string(argsJSON),
-				},
-			}
-		}
+		storeToolCalls := storeToolCallsFromAPI(res.Message.ToolCalls)
 
 		var content *string
 		if res.Message.Content != "" {
@@ -1440,11 +1683,6 @@ func (s *Server) getSettings(w http.ResponseWriter, r *http.Request) error {
 		settings.Models = envconfig.Models()
 	}
 
-	// Include current runtime settings
-	settings.Agent = s.Agent
-	settings.Tools = s.Tools
-	settings.WorkingDir = s.WorkingDir
-
 	w.Header().Set("Content-Type", "application/json")
 	return json.NewEncoder(w).Encode(responses.SettingsResponse{
 		Settings: settings,
@@ -1466,9 +1704,14 @@ func (s *Server) settings(w http.ResponseWriter, r *http.Request) error {
 		return fmt.Errorf("failed to save settings: %w", err)
 	}
 
+	savedSettings, err := s.Store.Settings()
+	if err != nil {
+		return fmt.Errorf("failed to reload settings: %w", err)
+	}
+
 	// Handle auto-update toggle changes
-	if old.AutoUpdateEnabled != settings.AutoUpdateEnabled {
-		if !settings.AutoUpdateEnabled {
+	if old.AutoUpdateEnabled != savedSettings.AutoUpdateEnabled {
+		if !savedSettings.AutoUpdateEnabled {
 			// Auto-update disabled: cancel any ongoing download
 			if s.Updater != nil {
 				s.Updater.CancelOngoingDownload()
@@ -1484,15 +1727,15 @@ func (s *Server) settings(w http.ResponseWriter, r *http.Request) error {
 		}
 	}
 
-	if old.ContextLength != settings.ContextLength ||
-		old.Models != settings.Models ||
-		old.Expose != settings.Expose {
+	if old.ContextLength != savedSettings.ContextLength ||
+		old.Models != savedSettings.Models ||
+		old.Expose != savedSettings.Expose {
 		s.Restart()
 	}
 
 	w.Header().Set("Content-Type", "application/json")
 	return json.NewEncoder(w).Encode(responses.SettingsResponse{
-		Settings: settings,
+		Settings: savedSettings,
 	})
 }
 
@@ -1695,9 +1938,25 @@ func supportsBrowserTools(model string) bool {
 	return strings.HasPrefix(strings.ToLower(model), "gpt-oss")
 }
 
+func hasToolPrefix(availableTools []map[string]any, prefix string) bool {
+	for _, tool := range availableTools {
+		name, _ := tool["name"].(string)
+		if strings.HasPrefix(name, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
 // buildChatRequest converts store.Chat to api.ChatRequest
 func (s *Server) buildChatRequest(chat *store.Chat, model string, think any, availableTools []map[string]any) (*api.ChatRequest, error) {
 	var msgs []api.Message
+	if hasToolPrefix(availableTools, "fs_") {
+		msgs = append(msgs, api.Message{
+			Role:    "system",
+			Content: "Workspace filesystem tools are available in this turn. Use the fs_* tools for file search, reads, and edits instead of guessing. Never claim a file was created, modified, moved, or deleted unless the corresponding fs_* tool call returned success in this conversation. If a requested file operation cannot be completed through a tool result, say that clearly.",
+		})
+	}
 	for _, m := range chat.Messages {
 		// Skip empty messages if present
 		if m.Content == "" && m.Thinking == "" && len(m.ToolCalls) == 0 && len(m.Attachments) == 0 {
@@ -1737,6 +1996,7 @@ func (s *Server) buildChatRequest(chat *store.Chat, model string, think any, ava
 					}
 
 					toolCalls = append(toolCalls, api.ToolCall{
+						ID: tc.ID,
 						Function: api.ToolCallFunction{
 							Name:      tc.Function.Name,
 							Arguments: args,
@@ -1749,6 +2009,7 @@ func (s *Server) buildChatRequest(chat *store.Chat, model string, think any, ava
 			apiMsg.Role = "tool"
 			apiMsg.Content = m.Content
 			apiMsg.ToolName = m.ToolName
+			apiMsg.ToolCallID = m.ToolCallID
 		case "user", "system":
 			// User and system messages are handled normally
 		default:

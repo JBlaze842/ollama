@@ -5,6 +5,8 @@ import { ImageThumbnail } from "./ImageThumbnail";
 import { isImageFile } from "@/utils/imageUtils";
 import CopyButton from "./CopyButton";
 import React, { useState, useMemo, useRef } from "react";
+import { FileToolStructuredPreview, FileToolStructuredResult } from "./FileToolCards";
+import type { PendingToolApprovals } from "@/hooks/useChats";
 
 const Message = React.memo(
   ({
@@ -15,6 +17,8 @@ const Message = React.memo(
     isFaded,
     browserToolResult,
     lastToolQuery,
+    pendingApprovals,
+    onApprovalDecision,
   }: {
     message: MessageType;
     onEditMessage?: (content: string, index: number) => void;
@@ -24,6 +28,8 @@ const Message = React.memo(
     // TODO(drifkin): this type isn't right
     browserToolResult?: BrowserToolResult;
     lastToolQuery?: string;
+    pendingApprovals?: PendingToolApprovals;
+    onApprovalDecision?: (toolCallId: string, approved: boolean) => Promise<void>;
   }) => {
     if (message.role === "user") {
       return (
@@ -42,6 +48,8 @@ const Message = React.memo(
           isFaded={isFaded}
           browserToolResult={browserToolResult}
           lastToolQuery={lastToolQuery}
+          pendingApprovals={pendingApprovals}
+          onApprovalDecision={onApprovalDecision}
         />
       );
     }
@@ -53,7 +61,9 @@ const Message = React.memo(
       prevProps.messageIndex === nextProps.messageIndex &&
       prevProps.isStreaming === nextProps.isStreaming &&
       prevProps.isFaded === nextProps.isFaded &&
-      prevProps.browserToolResult === nextProps.browserToolResult
+      prevProps.browserToolResult === nextProps.browserToolResult &&
+      prevProps.pendingApprovals === nextProps.pendingApprovals &&
+      prevProps.onApprovalDecision === nextProps.onApprovalDecision
     );
   },
 );
@@ -266,12 +276,25 @@ function ToolRoleContent({
   const rawToolResult = (message as any).tool_result;
   const toolName = (message as any).tool_name || (message as any).toolName;
   const [isCollapsed, setIsCollapsed] = useState(true);
+  const structuredResult = FileToolStructuredResult({
+    toolName,
+    result: rawToolResult,
+  });
 
-  if (browserToolResult && typeof browserToolResult === "object") {
+  if (
+    toolName?.startsWith("browser.") &&
+    browserToolResult &&
+    typeof browserToolResult === "object"
+  ) {
     return (
       <BrowserToolResult toolResult={browserToolResult} content={content} />
     );
   }
+
+  if (structuredResult) {
+    return <div className="space-y-2">{structuredResult}</div>;
+  }
+
   return (
     // collapsable tool result with raw json
     <div className="space-y-2">
@@ -375,6 +398,88 @@ function ToolRoleContent({
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+function ApprovalRequestCard({
+  toolCall,
+  approval,
+  onApprovalDecision,
+}: {
+  toolCall: ToolCall;
+  approval: NonNullable<PendingToolApprovals[string]>;
+  onApprovalDecision?: (toolCallId: string, approved: boolean) => Promise<void>;
+}) {
+  const [submitting, setSubmitting] = useState<"approve" | "reject" | null>(
+    null,
+  );
+  const [error, setError] = useState<string | null>(null);
+
+  const handleDecision = async (approved: boolean) => {
+    const toolCallId = approval.toolCallId || (toolCall as any).id;
+    if (!toolCallId || !onApprovalDecision) {
+      return;
+    }
+
+    setSubmitting(approved ? "approve" : "reject");
+    setError(null);
+    try {
+      await onApprovalDecision(toolCallId, approved);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Approval request failed");
+      setSubmitting(null);
+    }
+  };
+
+  const structuredPreview = FileToolStructuredPreview({
+    toolName: approval.toolName || toolCall.function.name,
+    preview: approval.toolPreviewData,
+  });
+
+  return (
+    <div className="mt-3 ml-6 rounded-xl border border-amber-200 bg-amber-50/80 p-3 text-sm text-neutral-800 dark:border-amber-900/60 dark:bg-amber-950/30 dark:text-neutral-200">
+      <div className="mb-3 flex items-start justify-between gap-3">
+        <div>
+          <div className="font-medium">Approval required</div>
+          <div className="mt-1 text-xs text-neutral-600 dark:text-neutral-400">
+            {approval.content ||
+              `Review ${approval.toolName || toolCall.function.name} before it runs.`}
+          </div>
+        </div>
+        <div className="flex gap-2">
+          <button
+            type="button"
+            className="rounded-full border border-neutral-300 px-3 py-1 text-xs font-medium text-neutral-700 transition hover:bg-white disabled:cursor-not-allowed disabled:opacity-50 dark:border-neutral-700 dark:text-neutral-200 dark:hover:bg-neutral-900"
+            disabled={submitting !== null || !onApprovalDecision}
+            onClick={() => void handleDecision(false)}
+          >
+            {submitting === "reject" ? "Rejecting..." : "Reject"}
+          </button>
+          <button
+            type="button"
+            className="rounded-full bg-neutral-900 px-3 py-1 text-xs font-medium text-white transition hover:bg-neutral-700 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-white dark:text-neutral-900 dark:hover:bg-neutral-300"
+            disabled={submitting !== null || !onApprovalDecision}
+            onClick={() => void handleDecision(true)}
+          >
+            {submitting === "approve" ? "Approving..." : "Approve"}
+          </button>
+        </div>
+      </div>
+
+      {structuredPreview ? (
+        structuredPreview
+      ) : approval.toolPreviewData ? (
+        <pre className="overflow-x-auto rounded-lg border border-neutral-200 bg-white p-3 text-xs dark:border-neutral-700 dark:bg-neutral-950">
+          <code>{JSON.stringify(approval.toolPreviewData, null, 2)}</code>
+        </pre>
+      ) : null}
+
+      {error ? (
+        <div className="mt-3 text-xs text-red-600 dark:text-red-400">
+          {error}
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -599,6 +704,8 @@ function ToolCallDisplay({
         "id",
         "file",
         "path",
+        "source_path",
+        "destination_path",
       ].find((k) => Object.prototype.hasOwnProperty.call(argsObj, k));
       if (preferredKey && typeof (argsObj as any)[preferredKey] === "string") {
         preview = String((argsObj as any)[preferredKey]);
@@ -880,6 +987,8 @@ function OtherRoleMessage({
   isFaded,
   browserToolResult,
   lastToolQuery,
+  pendingApprovals,
+  onApprovalDecision,
 }: {
   message: MessageType;
   previousMessage?: MessageType;
@@ -888,6 +997,8 @@ function OtherRoleMessage({
   // TODO(drifkin): this type isn't right
   browserToolResult?: BrowserToolResult;
   lastToolQuery?: string;
+  pendingApprovals?: PendingToolApprovals;
+  onApprovalDecision?: (toolCallId: string, approved: boolean) => Promise<void>;
 }) {
   const messageRef = useRef<HTMLDivElement>(null);
 
@@ -951,11 +1062,21 @@ function OtherRoleMessage({
       {message.tool_calls && message.tool_calls.length > 0 && (
         <div>
           {message.tool_calls.map((toolCall: ToolCall, index: number) => (
-            <ToolCallDisplay
-              key={index}
-              toolCall={toolCall}
-              browserToolResult={browserToolResult}
-            />
+            <div key={(toolCall as any).id || index}>
+              <ToolCallDisplay
+                toolCall={toolCall}
+                browserToolResult={browserToolResult}
+              />
+              {(toolCall as any).id &&
+              pendingApprovals &&
+              pendingApprovals[(toolCall as any).id] ? (
+                <ApprovalRequestCard
+                  toolCall={toolCall}
+                  approval={pendingApprovals[(toolCall as any).id]}
+                  onApprovalDecision={onApprovalDecision}
+                />
+              ) : null}
+            </div>
           ))}
         </div>
       )}

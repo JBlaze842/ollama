@@ -287,4 +287,12 @@ func TestMigrationFromEpoc(t *testing.T) {
 	if version != currentSchemaVersion {
 		t.Fatalf("expected: %d\n got: %d", currentSchemaVersion, version)
 	}
+
+	settings, err := s.Settings()
+	if err != nil {
+		t.Fatalf("failed to load settings after migration: %v", err)
+	}
+	if settings.FileToolsMode != "off" {
+		t.Fatalf("expected migrated FileToolsMode default to be off, got %q", settings.FileToolsMode)
+	}
 }

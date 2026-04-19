@@ -33,7 +33,7 @@ import {
 import {
   type ThemePreference,
   getThemePreference,
-  setThemePreference
+  setThemePreference,
 } from "@/lib/theme";
 
 function AnimatedDots() {
@@ -52,7 +52,7 @@ function AnimatedDots() {
 
 export default function Settings() {
   const [themePreference, setThemePreferenceState] = useState<ThemePreference>(
-      () => getThemePreference(),
+    () => getThemePreference(),
   );
   const queryClient = useQueryClient();
   const [showSaved, setShowSaved] = useState(false);
@@ -220,6 +220,26 @@ export default function Settings() {
     setTimeout(() => setShowSaved(false), 1500);
   }, []);
 
+  const handleWorkspaceToolsToggle = useCallback(
+    (checked: boolean) => {
+      if (!settings) return;
+
+      const nextMode =
+        checked && (!settings.FileToolsMode || settings.FileToolsMode === "off")
+          ? "read_only"
+          : settings.FileToolsMode || "off";
+
+      updateSettingsMutation.mutate(
+        new SettingsType({
+          ...settings,
+          FileToolsEnabled: checked,
+          FileToolsMode: nextMode,
+        }),
+      );
+    },
+    [settings, updateSettingsMutation],
+  );
+
   const handleResetToDefaults = () => {
     if (settings) {
       const defaultSettings = new SettingsType({
@@ -229,6 +249,9 @@ export default function Settings() {
         Agent: false,
         Tools: false,
         ContextLength: 0,
+        WorkingDir: "",
+        FileToolsEnabled: false,
+        FileToolsMode: "off",
         AutoUpdateEnabled: true,
       });
       updateSettingsMutation.mutate(defaultSettings);
@@ -447,15 +470,15 @@ export default function Settings() {
                         const isSelected = themePreference === theme;
 
                         return (
-                            <Button
-                                key={theme}
-                                type="button"
-                                color={isSelected ? "dark/zinc" : "white"}
-                                className="justify-center capitalize"
-                                onClick={() => handleThemePreferenceChange(theme)}
-                            >
-                              {theme}
-                            </Button>
+                          <Button
+                            key={theme}
+                            type="button"
+                            color={isSelected ? "dark/zinc" : "white"}
+                            className="justify-center capitalize"
+                            onClick={() => handleThemePreferenceChange(theme)}
+                          >
+                            {theme}
+                          </Button>
                         );
                       })}
                     </div>
@@ -507,7 +530,9 @@ export default function Settings() {
                   <div className="flex-shrink-0">
                     <Switch
                       checked={settings.AutoUpdateEnabled}
-                      onChange={(checked) => handleChange("AutoUpdateEnabled", checked)}
+                      onChange={(checked) =>
+                        handleChange("AutoUpdateEnabled", checked)
+                      }
                     />
                   </div>
                 </div>
@@ -588,7 +613,9 @@ export default function Settings() {
                     </Description>
                     <div className="mt-3">
                       <Slider
-                        value={settings.ContextLength || defaultContextLength || 0}
+                        value={
+                          settings.ContextLength || defaultContextLength || 0
+                        }
                         onChange={(value) => {
                           handleChange("ContextLength", value);
                         }}
@@ -610,44 +637,122 @@ export default function Settings() {
             </div>
           </div>
 
-          {/* Agent Mode */}
+          {/* Workspace Agent */}
           {window.OLLAMA_TOOLS && (
             <div className="overflow-hidden rounded-xl bg-white dark:bg-neutral-800">
               <div className="space-y-4 p-4">
                 <Field>
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-start space-x-3">
+                  <div className="flex items-start justify-between gap-4">
+                    <div className="flex items-start space-x-3 flex-1">
                       <BoltIcon className="mt-1 h-5 w-5 flex-shrink-0 text-black dark:text-neutral-100" />
                       <div>
-                        <Label>Enable Agent Mode</Label>
+                        <Label>Workspace agent</Label>
                         <Description>
-                          Use multi-turn tools to fulfill user requests
+                          Let tool-capable models search and read files inside a
+                          selected workspace.
                         </Description>
                       </div>
                     </div>
                     <Switch
-                      checked={settings.Agent}
-                      onChange={(checked) => handleChange("Agent", checked)}
+                      checked={settings.FileToolsEnabled}
+                      onChange={handleWorkspaceToolsToggle}
                     />
                   </div>
                 </Field>
 
-                {/* Tools Mode */}
                 <Field>
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-start space-x-3">
-                      <WrenchIcon className="mt-1 h-5 w-5 flex-shrink-0 text-black dark:text-neutral-100" />
-                      <div>
-                        <Label>Enable Tools Mode</Label>
-                        <Description>
-                          Use single-turn tools to fulfill user requests
-                        </Description>
+                  <div className="flex items-start space-x-3">
+                    <WrenchIcon className="mt-1 h-5 w-5 flex-shrink-0 text-black dark:text-neutral-100" />
+                    <div className="w-full">
+                      <Label>Permission mode</Label>
+                      <Description>
+                        V1 exposes read/search tools now and stores the mode for
+                        later write and approval flows.
+                      </Description>
+                      <div className="mt-3 grid grid-cols-3 gap-2">
+                        {[
+                          { value: "read_only", label: "Read only" },
+                          { value: "approve", label: "Approve" },
+                          { value: "full_auto", label: "Full auto" },
+                        ].map((mode) => (
+                          <Button
+                            key={mode.value}
+                            type="button"
+                            color={
+                              settings.FileToolsMode === mode.value
+                                ? "dark/zinc"
+                                : "white"
+                            }
+                            className="justify-center"
+                            disabled={!settings.FileToolsEnabled}
+                            onClick={() =>
+                              handleChange("FileToolsMode", mode.value)
+                            }
+                          >
+                            {mode.label}
+                          </Button>
+                        ))}
                       </div>
                     </div>
-                    <Switch
-                      checked={settings.Tools}
-                      onChange={(checked) => handleChange("Tools", checked)}
-                    />
+                  </div>
+                </Field>
+
+                <Field>
+                  <div className="flex items-start space-x-3">
+                    <FolderIcon className="mt-1 h-5 w-5 flex-shrink-0 text-black dark:text-neutral-100" />
+                    <div className="w-full">
+                      <Label>Workspace root</Label>
+                      <Description>
+                        All workspace file tools are restricted to this
+                        directory and its descendants.
+                      </Description>
+                      <div className="mt-2 flex items-center space-x-2">
+                        <Input
+                          value={settings.WorkingDir || ""}
+                          onChange={(e) =>
+                            handleChange("WorkingDir", e.target.value)
+                          }
+                          readOnly
+                        />
+                        <Button
+                          type="button"
+                          color="white"
+                          className="px-2"
+                          onClick={async () => {
+                            if (window.webview?.selectWorkingDirectory) {
+                              try {
+                                const directory =
+                                  await window.webview.selectWorkingDirectory();
+                                if (directory) {
+                                  handleChange("WorkingDir", directory);
+                                }
+                              } catch (error) {
+                                console.error(
+                                  "Error selecting working directory:",
+                                  error,
+                                );
+                              }
+                            }
+                          }}
+                        >
+                          <FolderIcon className="w-4 h-4 mr-1" />
+                          Browse
+                        </Button>
+                      </div>
+                    </div>
+                  </div>
+                </Field>
+
+                <Field>
+                  <div className="flex items-start space-x-3">
+                    <WrenchIcon className="mt-1 h-5 w-5 flex-shrink-0 text-black dark:text-neutral-100" />
+                    <div>
+                      <Label>Composer toggle</Label>
+                      <Description>
+                        When a workspace is configured, chats get a separate
+                        button to opt the next request into file tools.
+                      </Description>
+                    </div>
                   </div>
                 </Field>
               </div>

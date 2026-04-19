@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { getChats, getChat, sendMessage, type ChatEventUnion } from "../api";
-import { Chat, ErrorEvent, Model } from "@/gotypes";
+import { Chat, ErrorEvent, Model, ToolCall } from "@/gotypes";
 import { Message } from "@/gotypes";
 import { useSelectedModel } from "./useSelectedModel";
 import { createQueryBatcher } from "./useQueryBatcher";
@@ -8,6 +8,16 @@ import { useRefetchModels } from "./useModels";
 import { useStreamingContext } from "@/contexts/StreamingContext";
 import { getModelCapabilities } from "@/api";
 import { useCloudStatus } from "./useCloudStatus";
+
+export interface PendingToolApproval {
+  toolCallId: string;
+  toolCall?: ToolCall;
+  toolName?: string;
+  content?: string;
+  toolPreviewData?: any;
+}
+
+export type PendingToolApprovals = Record<string, PendingToolApproval>;
 
 export const useChats = () => {
   return useQuery({
@@ -95,6 +105,16 @@ export const useChatError = (chatId: string) => {
     initialData: null,
     staleTime: Infinity,
     gcTime: 1000 * 60 * 5, // Keep in cache for 5 minutes
+  });
+};
+
+export const useChatApprovals = (chatId: string) => {
+  return useQuery({
+    queryKey: ["chatApprovals", chatId],
+    queryFn: () => ({} as PendingToolApprovals),
+    initialData: {} as PendingToolApprovals,
+    staleTime: Infinity,
+    gcTime: 1000 * 60 * 30,
   });
 };
 
@@ -206,6 +226,10 @@ export const useSendMessage = (chatId: string) => {
     setDownloadProgress,
   } = useStreamingContext();
 
+  const clearChatApprovals = (id: string) => {
+    queryClient.setQueryData(["chatApprovals", id], {});
+  };
+
   const cleanupStreaming = (id: string) => {
     setStreamingChatIds((prev: Set<string>) => {
       const newSet = new Set(prev);
@@ -222,6 +246,7 @@ export const useSendMessage = (chatId: string) => {
       newMap.delete(id);
       return newMap;
     });
+    clearChatApprovals(id);
   };
 
   return useMutation({
@@ -254,6 +279,7 @@ export const useSendMessage = (chatId: string) => {
     }) => {
       // For existing chats, set streaming state and add optimistic user message
       if (chatId !== "new") {
+        clearChatApprovals(chatId);
         setStreamingChatIds((prev: Set<string>) => {
           const newSet = new Set(prev);
           newSet.add(chatId);
@@ -549,6 +575,43 @@ export const useSendMessage = (chatId: string) => {
             );
             break;
           }
+          case "approval_requested": {
+            const toolCallId = (event as any).toolCallId as string | undefined;
+            if (!toolCallId) break;
+
+            queryClient.setQueryData(
+              ["chatApprovals", currentChatId],
+              (old: PendingToolApprovals | undefined) => ({
+                ...(old || {}),
+                [toolCallId]: {
+                  toolCallId,
+                  toolCall: (event as any).toolCall,
+                  toolName: (event as any).toolName,
+                  content: (event as any).content,
+                  toolPreviewData: (event as any).toolPreviewData,
+                },
+              }),
+            );
+            break;
+          }
+          case "approval_resolved": {
+            const toolCallId = (event as any).toolCallId as string | undefined;
+            if (!toolCallId) break;
+
+            queryClient.setQueryData(
+              ["chatApprovals", currentChatId],
+              (old: PendingToolApprovals | undefined) => {
+                if (!old || !old[toolCallId]) {
+                  return old || {};
+                }
+
+                const next = { ...old };
+                delete next[toolCallId];
+                return next;
+              },
+            );
+            break;
+          }
           case "tool_result": {
             // Handle tool result events
             queryClient.setQueryData(
@@ -569,6 +632,9 @@ export const useSendMessage = (chatId: string) => {
                     }),
                     {
                       tool_result: (event as any).toolResultData,
+                      ...((event as any).toolCallId
+                        ? { tool_call_id: (event as any).toolCallId }
+                        : {}),
                       ...((event as any).toolName
                         ? { tool_name: (event as any).toolName }
                         : {}),
@@ -644,6 +710,7 @@ export const useSendMessage = (chatId: string) => {
               ["chatError", currentChatId],
               event as ErrorEvent,
             );
+            clearChatApprovals(currentChatId);
             break;
           }
           case "done":
@@ -665,6 +732,7 @@ export const useSendMessage = (chatId: string) => {
             queryClient.invalidateQueries({
               queryKey: ["chat", currentChatId],
             });
+            clearChatApprovals(currentChatId);
             break;
           case "chat_created": {
             if (!event.chatId) break;
@@ -713,6 +781,7 @@ export const useSendMessage = (chatId: string) => {
             // Cancel the old "new" chat query if it exists
             if (chatId === "new") {
               queryClient.cancelQueries({ queryKey: ["chat", "new"] });
+              clearChatApprovals("new");
             }
 
             // Invalidate chats list to include the new chat

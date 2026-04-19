@@ -257,6 +257,32 @@ export async function* sendMessage(
   }
 }
 
+export async function approveToolCall(
+  chatId: string,
+  toolCallId: string,
+  approved: boolean,
+): Promise<{ toolCallId: string; approved: boolean }> {
+  const response = await fetch(`${API_BASE}/api/v1/chat/${chatId}/tool-approval`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(
+      {
+        toolCallId,
+        approved,
+      },
+    ),
+  });
+
+  if (!response.ok) {
+    const error = await response.text();
+    throw new Error(error || "Failed to respond to tool approval");
+  }
+
+  return await response.json();
+}
+
 export async function getSettings(): Promise<{
   settings: Settings;
 }> {

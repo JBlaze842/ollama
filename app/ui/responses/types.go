@@ -55,7 +55,7 @@ type ModelCapabilitiesResponse struct {
 
 // ChatEvent is for regular chat messages and assistant interactions
 type ChatEvent struct {
-	EventName string `json:"eventName" ts_type:"\"chat\" | \"thinking\" | \"assistant_with_tools\" | \"tool_call\" | \"tool\" | \"tool_result\" | \"done\" | \"chat_created\""`
+	EventName string `json:"eventName" ts_type:"\"chat\" | \"thinking\" | \"assistant_with_tools\" | \"tool_call\" | \"tool\" | \"tool_result\" | \"approval_requested\" | \"approval_resolved\" | \"done\" | \"chat_created\""`
 
 	// Chat/Assistant message fields
 	Content           *string    `json:"content,omitempty"`
@@ -64,11 +64,14 @@ type ChatEvent struct {
 	ThinkingTimeEnd   *time.Time `json:"thinkingTimeEnd,omitempty" ts_type:"Date | undefined" ts_transform:"__VALUE__ && new Date(__VALUE__)"`
 
 	// Tool-related fields
-	ToolCalls      []store.ToolCall `json:"toolCalls,omitempty"`
-	ToolCall       *store.ToolCall  `json:"toolCall,omitempty"`
-	ToolName       *string          `json:"toolName,omitempty"`
-	ToolResult     *bool            `json:"toolResult,omitempty"`
-	ToolResultData any              `json:"toolResultData,omitempty"`
+	ToolCalls        []store.ToolCall `json:"toolCalls,omitempty"`
+	ToolCall         *store.ToolCall  `json:"toolCall,omitempty"`
+	ToolName         *string          `json:"toolName,omitempty"`
+	ToolCallID       *string          `json:"toolCallId,omitempty"`
+	ToolResult       *bool            `json:"toolResult,omitempty"`
+	ToolResultData   any              `json:"toolResultData,omitempty"`
+	ToolPreviewData  any              `json:"toolPreviewData,omitempty"`
+	ApprovalApproved *bool            `json:"approvalApproved,omitempty"`
 
 	// Chat creation fields
 	ChatID *string `json:"chatId,omitempty"`
@@ -130,6 +133,16 @@ type ChatRequest struct {
 
 type Error struct {
 	Error string `json:"error"`
+}
+
+type ToolApprovalRequest struct {
+	ToolCallID string `json:"toolCallId"`
+	Approved   bool   `json:"approved"`
+}
+
+type ToolApprovalResponse struct {
+	ToolCallID string `json:"toolCallId"`
+	Approved   bool   `json:"approved"`
 }
 
 type ModelUpstreamResponse struct {

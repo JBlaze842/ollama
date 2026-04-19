@@ -188,6 +188,7 @@ func (w *Webview) Run(path string) unsafe.Pointer {
 		}
 
 		init += `
+			window.OLLAMA_TOOLS = true;
 			window.OLLAMA_WEBSEARCH = true;
 		`
 

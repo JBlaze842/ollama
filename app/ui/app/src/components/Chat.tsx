@@ -6,6 +6,7 @@ import { DisplayStale } from "./DisplayStale";
 import { DisplayLogin } from "./DisplayLogin";
 import {
   useChat,
+  useChatApprovals,
   useSendMessage,
   useIsStreaming,
   useIsWaitingForLoad,
@@ -14,6 +15,7 @@ import {
   useShouldShowStaleDisplay,
   useDismissStaleModel,
 } from "@/hooks/useChats";
+import { approveToolCall } from "@/api";
 import { useHealth } from "@/hooks/useHealth";
 import { useMessageAutoscroll } from "@/hooks/useMessageAutoscroll";
 import {
@@ -34,6 +36,7 @@ export default function Chat({ chatId }: { chatId: string }) {
   const queryClient = useQueryClient();
   const navigate = useNavigate();
   const chatQuery = useChat(chatId === "new" ? "" : chatId);
+  const chatApprovalsQuery = useChatApprovals(chatId === "new" ? "" : chatId);
   const chatErrorQuery = useChatError(chatId === "new" ? "" : chatId);
   const { selectedModel } = useSelectedModel(chatId);
   const { user } = useUser();
@@ -89,6 +92,7 @@ export default function Chat({ chatId }: { chatId: string }) {
   const chatError = chatErrorQuery.data;
 
   const messages = allMessages;
+  const pendingApprovals = chatApprovalsQuery.data || {};
   const isStreaming = useIsStreaming(chatId);
   const isWaitingForLoad = useIsWaitingForLoad(chatId);
   const downloadProgress = useDownloadProgress(chatId);
@@ -195,6 +199,17 @@ export default function Chat({ chatId }: { chatId: string }) {
 
   const isWindows = navigator.platform.toLowerCase().includes("win");
 
+  const handleApprovalDecision = useCallback(
+    async (toolCallId: string, approved: boolean) => {
+      if (!chatId || chatId === "new") {
+        return;
+      }
+
+      await approveToolCall(chatId, toolCallId, approved);
+    },
+    [chatId],
+  );
+
   return chatId === "new" || chatQuery ? (
     <FileUpload
       onFilesAdded={handleFilesProcessed}
@@ -236,6 +251,8 @@ export default function Chat({ chatId }: { chatId: string }) {
               editingMessageIndex={editingMessage?.index}
               error={chatError}
               browserToolResult={browserToolResult}
+              pendingApprovals={pendingApprovals}
+              onApprovalDecision={handleApprovalDecision}
             />
           </section>
 

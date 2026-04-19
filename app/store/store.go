@@ -41,6 +41,7 @@ type Message struct {
 	ToolCalls         []ToolCall       `json:"tool_calls,omitempty"`
 	ToolCall          *ToolCall        `json:"tool_call,omitempty"`
 	ToolName          string           `json:"tool_name,omitempty"`
+	ToolCallID        string           `json:"tool_call_id,omitempty"`
 	ToolResult        *json.RawMessage `json:"tool_result,omitempty"`
 	CreatedAt         time.Time        `json:"created_at"`
 	UpdatedAt         time.Time        `json:"updated_at"`
@@ -56,6 +57,7 @@ type MessageOptions struct {
 	Thinking          string
 	ToolCalls         []ToolCall
 	ToolCall          *ToolCall
+	ToolCallID        string
 	ToolResult        *json.RawMessage
 	ThinkingTimeStart *time.Time
 	ThinkingTimeEnd   *time.Time
@@ -78,6 +80,7 @@ func NewMessage(role, content string, opts *MessageOptions) Message {
 		msg.Thinking = opts.Thinking
 		msg.ToolCalls = opts.ToolCalls
 		msg.ToolCall = opts.ToolCall
+		msg.ToolCallID = opts.ToolCallID
 		msg.ToolResult = opts.ToolResult
 		msg.ThinkingTimeStart = opts.ThinkingTimeStart
 		msg.ThinkingTimeEnd = opts.ThinkingTimeEnd
@@ -87,6 +90,7 @@ func NewMessage(role, content string, opts *MessageOptions) Message {
 }
 
 type ToolCall struct {
+	ID       string       `json:"id,omitempty"`
 	Type     string       `json:"type"`
 	Function ToolFunction `json:"function"`
 }
@@ -145,6 +149,12 @@ type Settings struct {
 
 	// WorkingDir specifies the working directory for all agent operations
 	WorkingDir string
+
+	// FileToolsEnabled indicates whether workspace filesystem tools can be exposed to chats
+	FileToolsEnabled bool
+
+	// FileToolsMode controls how workspace filesystem tools are allowed to operate
+	FileToolsMode string
 
 	// ContextLength specifies the context length for the ollama server (using OLLAMA_CONTEXT_LENGTH)
 	ContextLength int
@@ -394,6 +404,10 @@ func (s *Store) Settings() (Settings, error) {
 
 	if settings.LastHomeView == "" {
 		settings.LastHomeView = "launch"
+	}
+
+	if settings.FileToolsMode == "" {
+		settings.FileToolsMode = "off"
 	}
 
 	return settings, nil
