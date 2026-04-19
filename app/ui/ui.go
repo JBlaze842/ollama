@@ -843,6 +843,13 @@ func (s *Server) chat(w http.ResponseWriter, r *http.Request) error {
 		WebSearchEnabled := req.WebSearch != nil && *req.WebSearch
 		hasToolsCapability := slices.Contains(details.Capabilities, model.CapabilityTools)
 
+		s.log().Info("model capabilities evaluated",
+			"model", req.Model,
+			"capabilities", details.Capabilities,
+			"has_tools_capability", hasToolsCapability,
+			"web_search_requested", WebSearchEnabled,
+		)
+
 		if WebSearchEnabled && hasToolsCapability {
 			if supportsBrowserTools(req.Model) {
 				browserState, ok := s.browserState(chat)

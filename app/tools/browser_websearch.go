@@ -29,12 +29,12 @@ type WebSearchResult struct {
 	Metadata WebSearchMetadata `json:"metadata"`
 }
 
-// WebSearchResponse represents the complete response from the websearch API
+// WebSearchResponse represents the complete response grouped by query
 type WebSearchResponse struct {
 	Results map[string][]WebSearchResult `json:"results"`
 }
 
-// BrowserWebSearch tool for searching the web using ollama.com search API
+// BrowserWebSearch tool for running multiple local web searches
 type BrowserWebSearch struct{}
 
 func (w *BrowserWebSearch) Name() string {
@@ -42,7 +42,7 @@ func (w *BrowserWebSearch) Name() string {
 }
 
 func (w *BrowserWebSearch) Description() string {
-	return "Search the web for real-time information using ollama.com search API."
+	return "Search the web for real-time information using a local account-free web search provider."
 }
 
 func (w *BrowserWebSearch) Prompt() string {
@@ -99,14 +99,14 @@ func (w *BrowserWebSearch) Execute(ctx context.Context, args map[string]any) (an
 	}
 
 	maxResults := 5
-	if mr, ok := args["max_results"].(int); ok {
-		maxResults = mr
+	if mr, ok := args["max_results"].(float64); ok && int(mr) > 0 {
+		maxResults = int(mr)
 	}
 
 	return w.performWebSearch(ctx, queries, maxResults)
 }
 
-// performWebSearch handles the actual HTTP request to ollama.com search API
+// performWebSearch runs the local single-query search helper once per query
 func (w *BrowserWebSearch) performWebSearch(ctx context.Context, queries []string, maxResults int) (*WebSearchResponse, error) {
 	response := &WebSearchResponse{Results: make(map[string][]WebSearchResult, len(queries))}
 
@@ -133,11 +133,4 @@ func (w *BrowserWebSearch) performWebSearch(ctx context.Context, queries []strin
 	}
 
 	return response, nil
-}
-
-func truncateString(input string, limit int) string {
-	if limit <= 0 || len(input) <= limit {
-		return input
-	}
-	return input[:limit]
 }

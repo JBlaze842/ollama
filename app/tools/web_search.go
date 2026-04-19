@@ -3,60 +3,59 @@
 package tools
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
-	"net/http"
-	"net/url"
 	"strconv"
 	"strings"
 	"time"
 
-	"github.com/ollama/ollama/auth"
+	"github.com/ollama/ollama/internal/websearch"
 )
 
-type WebSearch struct{}
+const defaultWebSearchResults = 5
 
-type SearchRequest struct {
-	Query      string `json:"query"`
-	MaxResults int    `json:"max_results,omitempty"`
-}
-
+// SearchResult represents a single result from the local single-query search helper.
 type SearchResult struct {
 	Title   string `json:"title"`
 	URL     string `json:"url"`
 	Content string `json:"content"`
 }
 
+// SearchResponse represents the complete response for a single query.
 type SearchResponse struct {
 	Results []SearchResult `json:"results"`
 }
+
+// WebSearch searches the web for up-to-date information.
+type WebSearch struct{}
 
 func (w *WebSearch) Name() string {
 	return "web_search"
 }
 
 func (w *WebSearch) Description() string {
-	return "Search the web for real-time information using ollama.com web search API."
+	return "Search the web for real-time information using a local account-free web search provider."
 }
 
 func (w *WebSearch) Prompt() string {
-	return ""
+	return `Use the web_search tool to search the web for current information.
+Today's date is ` + time.Now().Format("January 2, 2006") + `
+Add "` + time.Now().Format("January 2, 2006") + `" for news queries and ` + strconv.Itoa(time.Now().Year()+1) + ` for other queries that need current information.`
 }
 
-func (g *WebSearch) Schema() map[string]any {
+func (w *WebSearch) Schema() map[string]any {
 	schemaBytes := []byte(`{
 		"type": "object",
 		"properties": {
 			"query": {
 				"type": "string",
-				"description": "The search query to execute"
+				"description": "Search query to look up"
 			},
 			"max_results": {
 				"type": "integer",
-				"description": "Maximum number of search results to return",
-				"default": 3
+				"description": "Maximum number of results to return (default: 5)",
+				"default": 5
 			}
 		},
 		"required": ["query"]
@@ -69,81 +68,73 @@ func (g *WebSearch) Schema() map[string]any {
 }
 
 func (w *WebSearch) Execute(ctx context.Context, args map[string]any) (any, string, error) {
-	rawQuery, ok := args["query"]
+	queryRaw, ok := args["query"]
 	if !ok {
 		return nil, "", fmt.Errorf("query parameter is required")
 	}
 
-	queryStr, ok := rawQuery.(string)
-	if !ok || strings.TrimSpace(queryStr) == "" {
+	query, ok := queryRaw.(string)
+	if !ok || strings.TrimSpace(query) == "" {
 		return nil, "", fmt.Errorf("query must be a non-empty string")
 	}
 
-	maxResults := 5
-	if v, ok := args["max_results"].(float64); ok && int(v) > 0 {
-		maxResults = int(v)
+	maxResults := defaultWebSearchResults
+	if mr, ok := args["max_results"].(float64); ok && int(mr) > 0 {
+		maxResults = int(mr)
+	} else if mr, ok := args["max_results"].(int); ok && mr > 0 {
+		maxResults = mr
 	}
 
-	result, err := performWebSearch(ctx, queryStr, maxResults)
+	result, err := performWebSearch(ctx, query, maxResults)
 	if err != nil {
 		return nil, "", err
 	}
 
-	return result, "", nil
+	return result, formatWebSearchResults(query, result), nil
 }
 
 func performWebSearch(ctx context.Context, query string, maxResults int) (*SearchResponse, error) {
-	if err := ensureCloudEnabledForTool(ctx, "web search is unavailable"); err != nil {
-		return nil, err
-	}
-
-	reqBody := SearchRequest{Query: query, MaxResults: maxResults}
-
-	jsonBody, err := json.Marshal(reqBody)
+	results, err := websearch.Search(ctx, query, maxResults)
 	if err != nil {
-		return nil, fmt.Errorf("failed to marshal request body: %w", err)
+		return nil, fmt.Errorf("web search failed: %w", err)
 	}
 
-	searchURL, err := url.Parse("https://ollama.com/api/web_search")
-	if err != nil {
-		return nil, fmt.Errorf("failed to parse search URL: %w", err)
+	response := &SearchResponse{
+		Results: make([]SearchResult, 0, len(results)),
 	}
 
-	q := searchURL.Query()
-	q.Add("ts", strconv.FormatInt(time.Now().Unix(), 10))
-	searchURL.RawQuery = q.Encode()
-
-	data := fmt.Appendf(nil, "%s,%s", http.MethodPost, searchURL.RequestURI())
-	signature, err := auth.Sign(ctx, data)
-	if err != nil {
-		return nil, fmt.Errorf("failed to sign request: %w", err)
+	for _, item := range results {
+		response.Results = append(response.Results, SearchResult{
+			Title:   item.Title,
+			URL:     item.URL,
+			Content: item.Content,
+		})
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, searchURL.String(), bytes.NewBuffer(jsonBody))
-	if err != nil {
-		return nil, fmt.Errorf("failed to create request: %w", err)
+	return response, nil
+}
+
+func formatWebSearchResults(query string, response *SearchResponse) string {
+	if response == nil || len(response.Results) == 0 {
+		return fmt.Sprintf("No web search results found for %q.", query)
 	}
 
-	req.Header.Set("Content-Type", "application/json")
-	if signature != "" {
-		req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", signature))
+	var b strings.Builder
+	fmt.Fprintf(&b, "Web search results for %q:\n", query)
+	for i, result := range response.Results {
+		fmt.Fprintf(&b, "%d. %s\n", i+1, result.Title)
+		fmt.Fprintf(&b, "   URL: %s\n", result.URL)
+		if snippet := strings.TrimSpace(result.Content); snippet != "" {
+			fmt.Fprintf(&b, "   Snippet: %s\n", truncateString(snippet, 400))
+		}
 	}
 
-	client := &http.Client{Timeout: 10 * time.Second}
-	resp, err := client.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("failed to execute search request: %w", err)
-	}
-	defer resp.Body.Close()
+	return strings.TrimSpace(b.String())
+}
 
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("search API error (status %d)", resp.StatusCode)
+func truncateString(input string, limit int) string {
+	if limit <= 0 || len(input) <= limit {
+		return input
 	}
-
-	var result SearchResponse
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return nil, fmt.Errorf("failed to decode response: %w", err)
-	}
-
-	return &result, nil
+	return input[:limit]
 }

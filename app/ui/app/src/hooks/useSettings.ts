@@ -47,7 +47,8 @@ export function useSettings() {
   const settings: SettingsState = useMemo(
     () => ({
       turboEnabled: settingsData?.settings?.TurboEnabled ?? false,
-      webSearchEnabled: settingsData?.settings?.WebSearchEnabled ?? false,
+      //webSearchEnabled: settingsData?.settings?.WebSearchEnabled ?? false,
+      webSearchEnabled: true,
       thinkEnabled: settingsData?.settings?.ThinkEnabled ?? false,
       thinkLevel: settingsData?.settings?.ThinkLevel ?? "none",
       selectedModel: settingsData?.settings?.SelectedModel ?? "",
